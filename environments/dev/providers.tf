@@ -31,12 +31,12 @@ provider "aws" {
 #
 # After step 2, all future terraform commands use remote state automatically.
 
-# terraform {
-#   backend "s3" {
-#     bucket         = "cloud-platform-lab-tfstate"
-#     key            = "environments/dev/terraform.tfstate"
-#     region         = "us-west-2"
-#     encrypt        = true
-#     dynamodb_table = "cloud-platform-lab-tflock"
-#   }
-# }
+ terraform {
+   backend "s3" {
+     bucket         = "cloud-platform-lab-tfstate"
+     key            = "environments/dev/terraform.tfstate"
+     region         = "us-west-2"
+     encrypt        = true
+     dynamodb_table = "cloud-platform-lab-tflock"
+   }
+ }

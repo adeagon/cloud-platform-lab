@@ -22,3 +22,8 @@ Thumbs.db
 .idea/
 *.swp
 *.swo
+
+# Kubernetes secrets (real values — never commit; applied out-of-band)
+# secret.example.yaml is intentionally committed (placeholder values only).
+k8s/**/secret.yaml
+k8s/**/*.secret.yaml

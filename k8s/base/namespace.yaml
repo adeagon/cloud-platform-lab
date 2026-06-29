@@ -1,0 +1,7 @@
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: sarif
+  labels:
+    app.kubernetes.io/name: sarif
+    app.kubernetes.io/part-of: sarif

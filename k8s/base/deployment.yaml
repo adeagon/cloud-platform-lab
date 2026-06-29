@@ -1,0 +1,76 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: sarif
+  labels:
+    app.kubernetes.io/name: sarif
+    app.kubernetes.io/component: server
+    app.kubernetes.io/part-of: sarif
+    app.kubernetes.io/managed-by: kustomize
+spec:
+  replicas: 1
+  # Recreate (not RollingUpdate): SQLite uses a ReadWriteOnce PVC — only one pod
+  # may mount it at a time. maxSurge: 1 would create a second pod during rollout
+  # that either cannot mount the PVC (different node) or risks SQLite contention
+  # (same node). Recreate accepts brief deployment downtime as the correct tradeoff
+  # until SQLite is replaced with a managed DB. Known production gap.
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: sarif
+      app.kubernetes.io/component: server
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: sarif
+        app.kubernetes.io/component: server
+        app.kubernetes.io/part-of: sarif
+        app.kubernetes.io/managed-by: kustomize
+    spec:
+      containers:
+        - name: sarif
+          # overlays rewrite this tag via the kustomize images transformer
+          image: sarif:latest
+          ports:
+            - name: http
+              containerPort: 3001
+          envFrom:
+            - configMapRef:
+                name: sarif-config
+            - secretRef:
+                name: sarif-secrets
+          readinessProbe:
+            httpGet:
+              path: /api/health
+              port: http
+            initialDelaySeconds: 10
+            periodSeconds: 15
+            failureThreshold: 3
+          livenessProbe:
+            httpGet:
+              path: /api/health
+              port: http
+            # More forgiving than readiness — don't restart on a transient blip.
+            initialDelaySeconds: 20
+            periodSeconds: 30
+            failureThreshold: 5
+          resources:
+            requests:
+              cpu: 100m
+              memory: 128Mi
+            limits:
+              cpu: 500m
+              memory: 512Mi
+          volumeMounts:
+            - name: data
+              mountPath: /data
+              # Mount the directory (not a subPath file) so all three SQLite WAL
+              # artifacts (sarif.db, sarif.db-wal, sarif.db-shm) persist on the PV.
+      volumes:
+        - name: data
+          persistentVolumeClaim:
+            claimName: sarif-data
+      # securityContext (fsGroup) intentionally omitted pending verification of the
+      # image USER in Session 2. If the container runs as non-root it may not be
+      # able to write /data — add fsGroup at that point.

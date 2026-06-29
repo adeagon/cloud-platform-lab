@@ -1,0 +1,7 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: sarif-config
+data:
+  # Strategic-merge patch — only overrides CORS_ORIGIN; all other keys are preserved.
+  CORS_ORIGIN: "http://sarif.local"

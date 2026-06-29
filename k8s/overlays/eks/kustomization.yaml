@@ -1,0 +1,21 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+resources:
+  - ../../base
+# ── STUB — NOT DEPLOYABLE until Phase 1C ─────────────────────────────────────────
+# Do NOT `kubectl apply -k overlays/eks` in this state: base's Ingress has no
+# ingressClassName and no host, which would create an ambiguous Ingress object.
+#
+# Completed in Phase 1C once EKS and the AWS Load Balancer Controller exist:
+#
+# images:
+#   - name: sarif
+#     newName: <ACCOUNT>.dkr.ecr.<REGION>.amazonaws.com/sarif
+#     newTag: <git-sha>
+#
+# patches:
+#   - path: configmap-cors-patch.yaml     # CORS_ORIGIN: https://<ALB hostname>
+#   - path: ingress-patch.yaml            # ingressClassName: alb + ALB annotations:
+#       # alb.ingress.kubernetes.io/scheme: internet-facing
+#       # alb.ingress.kubernetes.io/target-type: ip
+#       # (Confirm exact annotation names against current AWS LB Controller docs.)

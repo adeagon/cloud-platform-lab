@@ -1,0 +1,24 @@
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: sarif
+  labels:
+    app.kubernetes.io/name: sarif
+    app.kubernetes.io/component: server
+    app.kubernetes.io/part-of: sarif
+    app.kubernetes.io/managed-by: kustomize
+spec:
+  # ingressClassName and host are intentionally absent from base.
+  # Each overlay supplies them via a strategic-merge patch:
+  #   local:  ingressClassName: nginx, host: sarif.local
+  #   eks:    ingressClassName: alb + ALB annotations (Phase 1C)
+  rules:
+    - http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: sarif
+                port:
+                  number: 3001

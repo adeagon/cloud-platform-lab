@@ -1,0 +1,13 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+namespace: sarif
+resources:
+  - namespace.yaml
+  - configmap.yaml
+  - pvc.yaml
+  - deployment.yaml
+  - service.yaml
+  - ingress.yaml
+# secret.example.yaml is a committed TEMPLATE only. Secrets are applied out-of-band,
+# so it is deliberately NOT listed here — `kubectl apply -k` never renders or
+# overwrites the real Secret with placeholder values. See k8s/README.md.

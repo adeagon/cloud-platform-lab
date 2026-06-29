@@ -1,0 +1,20 @@
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: sarif
+spec:
+  # ingressClassName replaces the deprecated kubernetes.io/ingress.class annotation.
+  ingressClassName: nginx
+  # spec.rules is an atomic list in networking.k8s.io/v1 — the patch replaces the
+  # entire list. Restate it in full with the sarif.local host added.
+  rules:
+    - host: sarif.local
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: sarif
+                port:
+                  number: 3001

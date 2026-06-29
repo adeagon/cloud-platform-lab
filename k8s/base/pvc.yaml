@@ -1,0 +1,19 @@
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: sarif-data
+  labels:
+    app.kubernetes.io/name: sarif
+    app.kubernetes.io/component: server
+    app.kubernetes.io/part-of: sarif
+    app.kubernetes.io/managed-by: kustomize
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 1Gi
+  # storageClassName is intentionally omitted — binds via the cluster's default
+  # StorageClass. Local clusters (docker-desktop/minikube/kind) ship one.
+  # EKS requires the EBS CSI driver and a default StorageClass to be configured.
+  # Production would pin a specific StorageClass here.

@@ -48,11 +48,28 @@ cloud-platform-lab/
 │       ├── terraform.tfvars     # Dev-specific values
 │       ├── providers.tf         # AWS provider + backend config
 │       └── versions.tf          # Required providers and versions
-└── modules/
-    └── networking/
-        ├── main.tf              # VPC, subnets, route tables, NAT/IGW
-        ├── variables.tf         # Module inputs
-        └── outputs.tf           # Module outputs
+├── modules/
+│   └── networking/
+│       ├── main.tf              # VPC, subnets, route tables, NAT/IGW
+│       ├── variables.tf         # Module inputs
+│       └── outputs.tf           # Module outputs
+├── k8s/
+│   ├── README.md                # Design rationale (interview-ready notes)
+│   ├── base/                    # Kustomize base — app-agnostic defaults
+│   │   ├── kustomization.yaml
+│   │   ├── namespace.yaml
+│   │   ├── configmap.yaml       # Non-secret env vars
+│   │   ├── secret.example.yaml  # TEMPLATE only — real secret applied out-of-band
+│   │   ├── pvc.yaml             # SQLite persistence (ReadWriteOnce, 1Gi)
+│   │   ├── deployment.yaml      # replicas:1, Recreate strategy, probes
+│   │   ├── service.yaml         # ClusterIP :3001
+│   │   └── ingress.yaml         # No host/class in base (overlays add these)
+│   └── overlays/
+│       ├── local/               # nginx ingress, sarif.local host, local image tag
+│       └── eks/                 # STUB — completed in Phase 1C (ALB, ECR image)
+└── k8s-fundamentals/
+    ├── k8s-learning-notes.md    # K8s concepts reference
+    └── manifests/               # Exercise manifests (Exercises 1-7)
 ```
 
 ## Phases

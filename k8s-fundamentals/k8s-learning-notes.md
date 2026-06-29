@@ -77,3 +77,17 @@ A StorageClass defines how Kubernetes should create storage, including the stora
 **If two pods mount the same ReadWriteOnce volume, what happens? Why does this make SQLite hard to scale horizontally?**
 
 A ReadWriteOnce (RWO) volume can be mounted for read/write by only one node at a time. If two pods on different nodes try to mount it, one of them won't be able to attach the volume. This makes SQLite difficult to scale horizontally because all replicas would need access to the same database file, but only one pod can reliably write to it. In production, you'd typically use a client/server database like PostgreSQL or MySQL instead.
+
+## Exercise 7
+
+**Why is a Secret only base64-encoded, not encrypted, by default? What actually protects it?**
+
+Base64 is just an encoding, not encryption. It simply converts binary data into text. Kubernetes Secrets are protected by RBAC (which controls who can read them) and, if enabled, etcd encryption at rest, which encrypts them in the cluster's data store. Base64 is for storage and transport, not security.
+
+**ConfigMap vs Secret — when each?**
+
+ConfigMap: Stores non-sensitive configuration, such as feature flags, environment names, or application settings. Secret: Stores sensitive data, such as passwords, API keys, tokens, or TLS certificates. Both can be mounted into Pods, but Secrets receive additional access controls and can be encrypted at rest if configured.
+
+**Env var injection vs mounted-file injection — tradeoffs?**
+
+Environment variables: Simple and convenient for small configuration values, but changes usually require restarting the Pod to take effect. Mounted files: Better for larger configuration files, certificates, or keys. Mounted Secret/ConfigMap volumes can be updated by Kubernetes without recreating the Pod, though your application may still need to reload the files.

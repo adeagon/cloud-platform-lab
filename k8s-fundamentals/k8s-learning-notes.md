@@ -49,3 +49,17 @@ CrashLoopBackOff means the container repeatedly exits shortly after starting, so
 **Difference between a pod that crashes on startup vs. one that crashes after running a while?**
 
 Startup crash: The application fails during initialization (e.g., missing env var or bad config) and never becomes Ready, so it never serves traffic. Runtime crash: The application starts successfully, becomes Ready, serves traffic, and then crashes later due to issues like memory leaks, bugs, or dependency failures. Users may experience intermittent failures until the pod restarts.
+
+## Exercise 5
+
+**Readiness failing vs liveness failing — why does the difference matter?**
+
+Readiness probe fails: The pod stays running but is removed from the Service's endpoints, so it stops receiving traffic. Liveness probe fails: Kubernetes assumes the application is unhealthy and restarts the container. Readiness protects users from sending traffic to an app that isn't ready, while liveness attempts to recover an application that's become stuck or broken.
+
+**What happens if you set liveness too aggressively?**
+
+If the liveness probe has a timeout or threshold that's too strict, Kubernetes may restart a healthy but slow application, causing unnecessary restart loops, downtime, and instability.
+
+**When would you use a `startupProbe`?**
+
+Use a `startupProbe` for applications that take a long time to start, such as large Java applications, databases, or services performing lengthy initialization. It disables liveness and readiness checks until startup succeeds, preventing Kubernetes from restarting the application before it has finished initializing.

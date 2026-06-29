@@ -80,15 +80,110 @@ cp k8s/base/secret.example.yaml k8s/base/secret.yaml
 kubectl apply -f k8s/base/secret.yaml  # gitignored; applied manually
 ```
 
-### Apply order (Session 2)
+### Apply order
 
-`envFrom.secretRef` is **not** marked `optional`, so the pod will not start until `sarif-secrets` exists. Correct order:
+`envFrom.secretRef` is **not** marked `optional`, so the pod will not start until `sarif-secrets` exists. Correct order on a fresh cluster:
 
-1. `kubectl apply -k k8s/overlays/local` — creates the `sarif` Namespace (and all other resources).
+1. `kubectl apply -f k8s/base/namespace.yaml` — creates the `sarif` Namespace first, which is required before the Secret can be created in it.
 2. `kubectl apply -f k8s/base/secret.yaml` — creates `sarif-secrets` in the `sarif` namespace.
-3. The Deployment's pod will now become schedulable (kubelet can resolve both `envFrom` refs).
+3. `kubectl apply -k k8s/overlays/local` — creates all remaining resources (Namespace idempotently, ConfigMap, PVC, Deployment, Service, Ingress).
+4. The Deployment's pod will now start without entering `CreateContainerConfigError`.
 
 (`secret.yaml` carries `namespace: sarif` explicitly since kustomize doesn't manage it.)
+
+---
+
+## Local cluster setup (kind)
+
+Verified bring-up sequence for the `lab` kind cluster on macOS/Apple Silicon (arm64).
+
+**Prerequisites:** `kind`, `kubectl` (with built-in kustomize), Docker Desktop.
+
+### 1. Create the cluster
+
+```bash
+kind create cluster --name lab --config kind/cluster.yaml
+```
+
+`kind/cluster.yaml` configures `extraPortMappings` for host ports 80 and 443. These are
+**load-bearing**: they route host TCP 80/443 into the kind node, where the ingress-nginx controller
+binds `hostPort: 80/443` directly on the container. The `ingress-ready=true` node label is
+included (matches the canonical kind example and is harmless), but the pinned controller manifest
+does **not** select on it — it schedules via `nodeSelector: kubernetes.io/os: linux` and
+tolerations for the control-plane taint. Do not cite the label in an interview as the scheduling
+mechanism.
+
+### 2. Install ingress-nginx
+
+Current kind documentation notes that `cloud-provider-kind` now supports Ingress natively and
+third-party controllers are not required by default. nginx ingress is chosen here deliberately
+to practice a real, controller-based ingress and mirror production routing concepts.
+
+The manifest is **pinned** to `controller-v1.15.1` (verified: creates the `ingress-nginx`
+namespace, the `nginx` IngressClass, and runs controller image `v1.15.1`) rather than the
+floating `main` branch for reproducibility.
+
+```bash
+kubectl apply -f https://raw.githubusercontent.com/kubernetes/ingress-nginx/controller-v1.15.1/deploy/static/provider/kind/deploy.yaml
+
+kubectl wait --namespace ingress-nginx \
+  --for=condition=ready pod \
+  --selector=app.kubernetes.io/component=controller \
+  --timeout=300s
+```
+
+Wait for the controller before deploying the app — the admission webhook must be ready or the
+Ingress object will be rejected.
+
+### 3. `/etc/hosts`
+
+```bash
+grep -qE '(^|[[:space:]])sarif\.local([[:space:]]|$)' /etc/hosts \
+  || echo '127.0.0.1 sarif.local' | sudo tee -a /etc/hosts
+```
+
+Fallback if `sudo` is unavailable: `curl -H 'Host: sarif.local' http://localhost/api/health`.
+
+### 4. Deploy the app
+
+```bash
+# On Apple Silicon — build natively for arm64, no --platform flag.
+docker build -t sarif:local /path/to/sarif/app
+kind load docker-image sarif:local --name lab
+
+# Apply order: namespace first, then the Secret, then everything else.
+kubectl apply -f k8s/base/namespace.yaml
+# Apply the Secret (placeholder values are sufficient for /api/health):
+kubectl create secret generic sarif-secrets \
+  --from-literal=SEATS_API_KEY=placeholder \
+  --from-literal=RAPIDAPI_KEY=placeholder \
+  --from-literal=TRAVELPAYOUTS_TOKEN=placeholder \
+  --from-literal=PUSHOVER_TOKEN=placeholder \
+  --from-literal=PUSHOVER_USER_KEY=placeholder \
+  -n sarif --dry-run=client -o yaml | kubectl apply -f -
+# For real values, see "Out-of-band secret management" above.
+
+kubectl apply -k k8s/overlays/local
+kubectl wait pod --selector=app.kubernetes.io/name=sarif -n sarif \
+  --for=condition=Ready --timeout=120s
+```
+
+### 5. Verified end state
+
+```
+pod/sarif-*   Running  Ready 1/1
+pvc/sarif-data  Bound  1Gi  standard (kind local-path provisioner)
+ingress/sarif   class:nginx  host:sarif.local  ADDRESS:localhost
+endpoint sarif  <podIP>:3001
+```
+
+```bash
+curl http://sarif.local/api/health
+# → 200 {"ok":true,"service":"sarif"}
+```
+
+> The Ingress `ADDRESS` field showing `localhost` is controller/version-dependent in kind.
+> A blank `ADDRESS` is not a failure if the `curl` returns 200.
 
 ---
 
@@ -108,11 +203,11 @@ Kustomize is built into `kubectl` — no extra tooling, no templating language t
 
 | Gap | Notes |
 |-----|-------|
-| `securityContext / fsGroup` | Omitted pending verification of the `sarif` image `USER` in Session 2. If the container runs non-root it may not write `/data`; add `fsGroup` then. |
-| Default StorageClass | PVC omits `storageClassName` — deliberate. Works on any cluster with a default SC (docker-desktop, minikube, kind). EKS requires the EBS CSI driver + a default StorageClass. Production would pin one. |
+| `securityContext / fsGroup` | **Resolved (Session 2).** The runtime image (`node:20-bookworm-slim`) has no `USER` directive — the container runs as root and writes the `/data` PVC without `fsGroup`. Omitted `securityContext` is correct for local. Production hardening (run non-root, add `runAsNonRoot` + `fsGroup`) is a future phase. |
+| Default StorageClass | PVC omits `storageClassName` — deliberate. Works on any cluster with a default SC. **Verified (Session 2):** PVC bound on kind's `standard` (local-path provisioner). EKS requires the EBS CSI driver + a default StorageClass. Production would pin one. |
 | SQLite → managed DB | Required to enable `replicas > 1` and `RollingUpdate`. Future phase. |
 | EKS overlay | Stub only — Phase 1C. |
-| `.env` / Dockerfile `COPY . .` | Verify `app/.env` remains git-ignored and Docker-ignored before Phase 1C image builds. Currently not baked into the image; re-confirm at build time. |
+| `.env` / Dockerfile `COPY . .` | **Verified (Session 2):** `app/.dockerignore` excludes `.env` — not baked into the `sarif:local` image. Re-confirm at Phase 1C ECR build time. |
 
 ---
 

@@ -40,6 +40,8 @@ serving infrastructure.
 ```
 cloud-platform-lab/
 ├── README.md
+├── kind/
+│   └── cluster.yaml             # Local kind cluster (extraPortMappings 80/443 for nginx ingress)
 ├── environments/
 │   └── dev/
 │       ├── main.tf              # Root module — calls child modules
@@ -54,7 +56,7 @@ cloud-platform-lab/
 │       ├── variables.tf         # Module inputs
 │       └── outputs.tf           # Module outputs
 ├── k8s/
-│   ├── README.md                # Design rationale (interview-ready notes)
+│   ├── README.md                # Design rationale + local bring-up runbook (interview-ready)
 │   ├── base/                    # Kustomize base — app-agnostic defaults
 │   │   ├── kustomization.yaml
 │   │   ├── namespace.yaml

@@ -25,3 +25,13 @@ ErrImagePull means Kubernetes tried to pull the image and failed. ImagePullBackO
 **How would this manifest differently if the image were in a private registry with no pull secret?**
 
 The Events section would show an authorization error — something like `401 Unauthorized` or `pull access denied` — rather than `not found`. That's how you distinguish a missing pull secret from a bad image tag in a real incident.
+
+## Exercise 3
+
+**Why does `kubectl get endpoints` being empty tell you it's a selector problem, not a pod problem?**
+
+The endpoints list is populated by the selector matching pod labels. If pods are Running but endpoints is empty, the only explanation is the selector isn't matching anything — the pods aren't the problem, the label query is. That's the diagnostic logic: healthy pods + empty endpoints = selector mismatch.
+
+**Why is this bug hard to spot?**
+
+Every individual component looks healthy. `kubectl get pods` shows Running. `kubectl get service` shows the Service exists. `kubectl get ingress` shows the Ingress is configured. Nothing is obviously broken until you specifically check `kubectl get endpoints`. Most people's instinct is to look at pods first — and pods look fine. The bug hides in the gap between the Service and the pods.

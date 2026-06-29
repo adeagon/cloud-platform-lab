@@ -35,3 +35,17 @@ The endpoints list is populated by the selector matching pod labels. If pods are
 **Why is this bug hard to spot?**
 
 Every individual component looks healthy. `kubectl get pods` shows Running. `kubectl get service` shows the Service exists. `kubectl get ingress` shows the Ingress is configured. Nothing is obviously broken until you specifically check `kubectl get endpoints`. Most people's instinct is to look at pods first — and pods look fine. The bug hides in the gap between the Service and the pods.
+
+## Exercise 4
+
+**What is the backoff in CrashLoopBackOff?**
+
+CrashLoopBackOff means the container repeatedly exits shortly after starting, so Kubernetes enters an exponential restart backoff to avoid constantly restarting a broken application.
+
+**Why `--previous`?**
+
+`kubectl logs --previous` shows the logs from the last terminated container instance, not the currently running one. It's useful when a container crashes and restarts quickly, because the current container may not have produced any logs yet.
+
+**Difference between a pod that crashes on startup vs. one that crashes after running a while?**
+
+Startup crash: The application fails during initialization (e.g., missing env var or bad config) and never becomes Ready, so it never serves traffic. Runtime crash: The application starts successfully, becomes Ready, serves traffic, and then crashes later due to issues like memory leaks, bugs, or dependency failures. Users may experience intermittent failures until the pod restarts.

@@ -63,3 +63,17 @@ If the liveness probe has a timeout or threshold that's too strict, Kubernetes m
 **When would you use a `startupProbe`?**
 
 Use a `startupProbe` for applications that take a long time to start, such as large Java applications, databases, or services performing lengthy initialization. It disables liveness and readiness checks until startup succeeds, preventing Kubernetes from restarting the application before it has finished initializing.
+
+## Exercise 6
+
+**Why does a PVC exist separately from the pod?**
+
+A PersistentVolumeClaim (PVC) exists separately because data should outlive the pod. Pods are ephemeral — they can be deleted, rescheduled, or replaced — but the PVC keeps the storage attached so a new pod can reuse the same data.
+
+**What's a StorageClass and what does "dynamic provisioning" mean?**
+
+A StorageClass defines how Kubernetes should create storage, including the storage type and provider (e.g., AWS EBS, Azure Disk). Dynamic provisioning means Kubernetes automatically creates a PersistentVolume when a PVC requests one, instead of requiring an administrator to manually create the volume first.
+
+**If two pods mount the same ReadWriteOnce volume, what happens? Why does this make SQLite hard to scale horizontally?**
+
+A ReadWriteOnce (RWO) volume can be mounted for read/write by only one node at a time. If two pods on different nodes try to mount it, one of them won't be able to attach the volume. This makes SQLite difficult to scale horizontally because all replicas would need access to the same database file, but only one pod can reliably write to it. In production, you'd typically use a client/server database like PostgreSQL or MySQL instead.

@@ -187,6 +187,10 @@ curl http://sarif.local/api/health
 > The Ingress `ADDRESS` field showing `localhost` is controller/version-dependent in kind.
 > A blank `ADDRESS` is not a failure if the `curl` returns 200.
 
+**Verified (Session 3):** namespace torn down (`kubectl delete namespace sarif`) and rebuilt from scratch following the documented apply order above. All six resources reported `created`; pod reached `1/1 Ready` within 30 s; endpoints populated; `/api/health` returned `200`; fresh empty DB confirmed. Proves the runbook works on a clean cluster, not just against pre-existing state.
+
+**Verified (Session 3) — Pushover end-to-end:** with real keys in `sarif-secrets`, called `sendNotification()` directly from inside the pod via `kubectl exec -- node --input-type=module -e "import('/app/server/services/pushover.js')..."`. Returned `{"ok":true}`; notification received on phone. The *evaluation leg* (Seats.aero → `alert_runs` → SSE) was proven separately via "Run Now" earlier in the session. Both legs proven; a single organic award-match→notify event was not produced (depends on live award availability).
+
 ---
 
 ## Kustomize over Helm

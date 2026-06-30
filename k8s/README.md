@@ -34,7 +34,7 @@ The app uses SQLite backed by a `ReadWriteOnce` PVC. A RWO volume can only be mo
 
 ## Port: 3001 throughout
 
-The app's default `PORT` is `3001` and the Dockerfile `EXPOSE`s `3001`. The Compose file sets `PORT=3002` and maps `3002:3002` to avoid a host port conflict on the Raspberry Pi where another service occupies port 3001. That is a host-level concern irrelevant in Kubernetes pod networking. K8s manifests use `3001` everywhere.
+The app's default `PORT` is `3001` and the Dockerfile `EXPOSE`s `3001`. The Compose file sets `PORT=3002` (both the env var and the port mapping) to avoid a host port conflict when co-located with other services on the Raspberry Pi. This is a host-level override, not an app requirement — the app is fully env-driven and defaults to `3001`. Kubernetes pod networking has no host port conflicts, so the manifests use `3001` throughout.
 
 Port `3001` lives in one structural place — the container's named port `http`. Everything else (probes, Service) references it by name.
 
@@ -58,9 +58,11 @@ This endpoint checks the thing that actually matters for correctness (the DB), n
 
 `envFrom` pulls both:
 - `sarif-config` (ConfigMap) — non-sensitive configuration: `HOST`, `PORT`, `SARIF_DB_PATH`, `CORS_ORIGIN`, `ALERT_POLL_INTERVAL_MS`, `MAX_ALERTS`.
-- `sarif-secrets` (Secret) — five API keys: `SEATS_API_KEY`, `RAPIDAPI_KEY`, `TRAVELPAYOUTS_TOKEN`, `PUSHOVER_TOKEN`, `PUSHOVER_USER_KEY`.
+- `sarif-secrets` (Secret) — API keys: `SEATS_API_KEY`, `PUSHOVER_TOKEN`, `PUSHOVER_USER_KEY` (required); `RAPIDAPI_KEY` (→ `GET /api/cashbiz`, optional) and `TRAVELPAYOUTS_TOKEN` (→ `GET /api/cash`, optional). The optional keys power cash-price comparison features; the app starts and award search works without them — those endpoints return HTTP 503 when unset.
 
 `envFrom` is cleaner than listing individual `env[].valueFrom` entries — the app reads all these vars anyway, no selective exposure is needed.
+
+**Key precedence note:** when the same key appears in both a ConfigMap and a Secret, the `envFrom` source listed *last* wins. `sarif-secrets` is listed after `sarif-config`, so Secret values take precedence for any duplicate keys (e.g. if `HOST` or `PORT` are present in both, the Secret wins). If the Secret was created with `--from-env-file` from an existing `.env`, be aware of which keys it contains — they silently shadow the ConfigMap values for those keys.
 
 ### CORS_ORIGIN behavior
 
@@ -206,8 +208,11 @@ Kustomize is built into `kubectl` — no extra tooling, no templating language t
 | `securityContext / fsGroup` | **Resolved (Session 2).** The runtime image (`node:20-bookworm-slim`) has no `USER` directive — the container runs as root and writes the `/data` PVC without `fsGroup`. Omitted `securityContext` is correct for local. Production hardening (run non-root, add `runAsNonRoot` + `fsGroup`) is a future phase. |
 | Default StorageClass | PVC omits `storageClassName` — deliberate. Works on any cluster with a default SC. **Verified (Session 2):** PVC bound on kind's `standard` (local-path provisioner). EKS requires the EBS CSI driver + a default StorageClass. Production would pin one. |
 | SQLite → managed DB | Required to enable `replicas > 1` and `RollingUpdate`. Future phase. |
+| `Recreate` deployment downtime | During a rollout, Recreate terminates the old pod before starting the new one — brief downtime is unavoidable. Acceptable for a lab environment. Not acceptable for production SLAs; requires moving to a managed database + RollingUpdate to fix. |
+| Single-replica, not highly available | Current deployment is `replicas: 1` and has no redundancy. Production would first move state to a managed database (RDS/Aurora), then run multiple replicas across AZs with PodDisruptionBudgets and topology-spread constraints. With SQLite/RWO, those HA mechanisms don't buy anything today. |
 | EKS overlay | Stub only — Phase 1C. |
 | `.env` / Dockerfile `COPY . .` | **Verified (Session 2):** `app/.dockerignore` excludes `.env` — not baked into the `sarif:local` image. Re-confirm at Phase 1C ECR build time. |
+| Probe scope is shallow | Both probes check `SELECT 1` — this proves the database connection is live, not that it's the *correct* database or the PVC-mounted one. A misconfigured `SARIF_DB_PATH` would cause the app to open a fresh empty database on the container's ephemeral filesystem; the probe would still pass, but persistent data would be silently inaccessible. The fix is always to ensure `SARIF_DB_PATH` points at the PVC mount (`/data/sarif.db`). |
 
 ---
 

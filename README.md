@@ -55,6 +55,7 @@ cloud-platform-lab/
 │       ├── main.tf              # VPC, subnets, route tables, NAT/IGW
 │       ├── variables.tf         # Module inputs
 │       └── outputs.tf           # Module outputs
+├── TEARDOWN.md                  # Teardown checklist (kind cluster, cost cleanup)
 ├── k8s/
 │   ├── README.md                # Design rationale + local bring-up runbook (interview-ready)
 │   ├── base/                    # Kustomize base — app-agnostic defaults
@@ -68,6 +69,8 @@ cloud-platform-lab/
 │   │   └── ingress.yaml         # No host/class in base (overlays add these)
 │   └── overlays/
 │       ├── local/               # nginx ingress, sarif.local host, local image tag
+│       │   ├── configmap-cors-patch.yaml  # CORS_ORIGIN: http://sarif.local
+│       │   └── ingress-patch.yaml         # ingressClassName: nginx, host: sarif.local
 │       └── eks/                 # STUB — completed in Phase 1C (ALB, ECR image)
 └── k8s-fundamentals/
     ├── k8s-learning-notes.md    # K8s concepts reference

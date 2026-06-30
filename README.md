@@ -71,7 +71,7 @@ cloud-platform-lab/
 │       ├── local/               # nginx ingress, sarif.local host, local image tag
 │       │   ├── configmap-cors-patch.yaml  # CORS_ORIGIN: http://sarif.local
 │       │   └── ingress-patch.yaml         # ingressClassName: nginx, host: sarif.local
-│       └── eks/                 # STUB — completed in Phase 1C (ALB, ECR image)
+│       └── eks/                 # Wired + deployed in Phase 1C (ALB, ECR image) — verified, see k8s/README.md
 └── k8s-fundamentals/
     ├── k8s-learning-notes.md    # K8s concepts reference
     └── manifests/               # Exercise manifests (Exercises 1-7)

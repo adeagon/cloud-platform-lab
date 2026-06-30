@@ -201,7 +201,13 @@ Kustomize is built into `kubectl` — no extra tooling, no templating language t
 
 ## EKS overlay
 
-`overlays/eks/kustomization.yaml` is a **stub** and is **NOT deployable in this state.** It renders the same output as base (no `ingressClassName`, no host on the Ingress) — applying it would create an ambiguous Ingress. It will be completed in Phase 1C when EKS, ECR, and the AWS Load Balancer Controller exist.
+`overlays/eks/kustomization.yaml` wires the `images` transformer to the ECR image and patches the Ingress for the AWS Load Balancer Controller (`ingressClassName: alb`, plus `scheme: internet-facing`, `target-type: ip`, `healthcheck-path: /api/health` annotations). The Ingress rule is intentionally host-less — Phase 1C exposes the app via the ALB's generated DNS name over HTTP only, with no custom domain or TLS yet.
+
+**Verified (Phase 1C):** deployed to cluster `cloud-platform-lab-dev`, namespace `sarif`, image `…/sarif:5012516`. Pod `1/1 Running`, 0 restarts. PVC `sarif-data` `Bound` on `gp3`. ALB `active`, `internet-facing`, target `healthy`. `GET /api/health` and `GET /` both returned `200` through the ALB; manual browser load confirmed, no CORS errors observed in the console — `CORS_ORIGIN` was left at the base default and no CORS patch was added. Pushover notification path verified from the EKS pod (`sendNotification()` via `kubectl exec`, same method as the Session 3 local verification) — returned `{"ok":true}`, notification received. `TRAVELPAYOUTS_TOKEN` was intentionally excluded from `sarif-secrets` for this verification (only `SEATS_API_KEY`, `PUSHOVER_TOKEN`, `PUSHOVER_USER_KEY` were needed) — `/api/cash` returns 503 as expected.
+
+**HTTP-only ALB:** an intentional Phase 1C lab tradeoff — no ACM cert, Route 53, Cloudflare, or custom domain yet. TLS is deferred to a future phase.
+
+**Phase 1C is not complete** until a teardown → recreate cycle is proven on this overlay (not yet done as of this verification). GitHub Actions changes are deferred to Phase 1D.
 
 ---
 
@@ -210,12 +216,12 @@ Kustomize is built into `kubectl` — no extra tooling, no templating language t
 | Gap | Notes |
 |-----|-------|
 | `securityContext / fsGroup` | **Resolved (Session 2).** The runtime image (`node:20-bookworm-slim`) has no `USER` directive — the container runs as root and writes the `/data` PVC without `fsGroup`. Omitted `securityContext` is correct for local. Production hardening (run non-root, add `runAsNonRoot` + `fsGroup`) is a future phase. |
-| Default StorageClass | PVC omits `storageClassName` — deliberate. Works on any cluster with a default SC. **Verified (Session 2):** PVC bound on kind's `standard` (local-path provisioner). EKS requires the EBS CSI driver + a default StorageClass. Production would pin one. |
+| Default StorageClass | PVC omits `storageClassName` — deliberate. Works on any cluster with a default SC. **Verified (Session 2):** PVC bound on kind's `standard` (local-path provisioner). **Verified (Phase 1C):** PVC bound on EKS `gp3` (EBS CSI driver + Terraform-managed default StorageClass). Production would still pin a specific StorageClass explicitly. |
 | SQLite → managed DB | Required to enable `replicas > 1` and `RollingUpdate`. Future phase. |
 | `Recreate` deployment downtime | During a rollout, Recreate terminates the old pod before starting the new one — brief downtime is unavoidable. Acceptable for a lab environment. Not acceptable for production SLAs; requires moving to a managed database + RollingUpdate to fix. |
 | Single-replica, not highly available | Current deployment is `replicas: 1` and has no redundancy. Production would first move state to a managed database (RDS/Aurora), then run multiple replicas across AZs with PodDisruptionBudgets and topology-spread constraints. With SQLite/RWO, those HA mechanisms don't buy anything today. |
-| EKS overlay | Stub only — Phase 1C. |
-| `.env` / Dockerfile `COPY . .` | **Verified (Session 2):** `app/.dockerignore` excludes `.env` — not baked into the `sarif:local` image. Re-confirm at Phase 1C ECR build time. |
+| EKS overlay | **Verified (Phase 1C)** — wired to the ECR image, deployed, reachable via ALB (HTTP only). See "EKS overlay" section above. Teardown → recreate not yet proven. |
+| `.env` / Dockerfile `COPY . .` | **Verified (Session 2):** `app/.dockerignore` excludes `.env` — not baked into the `sarif:local` image. **Re-confirmed (Phase 1C):** same `.dockerignore` audited clean immediately before the first ECR push (tag `5012516`). |
 | Probe scope is shallow | Both probes check `SELECT 1` — this proves the database connection is live, not that it's the *correct* database or the PVC-mounted one. A misconfigured `SARIF_DB_PATH` would cause the app to open a fresh empty database on the container's ephemeral filesystem; the probe would still pass, but persistent data would be silently inaccessible. The fix is always to ensure `SARIF_DB_PATH` points at the PVC mount (`/data/sarif.db`). |
 
 ---

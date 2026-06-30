@@ -1,0 +1,24 @@
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: sarif
+  annotations:
+    alb.ingress.kubernetes.io/scheme: internet-facing
+    alb.ingress.kubernetes.io/target-type: ip
+    alb.ingress.kubernetes.io/healthcheck-path: /api/health
+spec:
+  # ingressClassName replaces the deprecated kubernetes.io/ingress.class annotation.
+  ingressClassName: alb
+  # spec.rules is an atomic list in networking.k8s.io/v1 — the patch replaces the
+  # entire list. Host-less: Phase 1C is HTTP-only via the ALB's generated DNS name,
+  # no custom domain yet.
+  rules:
+    - http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: sarif
+                port:
+                  number: 3001

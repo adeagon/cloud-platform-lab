@@ -27,3 +27,6 @@ Thumbs.db
 # secret.example.yaml is intentionally committed (placeholder values only).
 k8s/**/secret.yaml
 k8s/**/*.secret.yaml
+
+# Session checkpoint files (working notes, not repo artifacts)
+PHASE_*_SESSION_*_CHECKPOINT.md

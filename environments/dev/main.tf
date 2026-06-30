@@ -58,6 +58,10 @@ resource "aws_dynamodb_table" "tflock" {
     Name        = "${var.project_name}-tflock"
     Description = "Terraform state lock table for ${var.project_name}"
   }
+
+  lifecycle {
+    prevent_destroy = true
+  }
 }
 
 ########################################

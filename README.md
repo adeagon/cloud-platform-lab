@@ -1,38 +1,38 @@
 # Cloud Platform Lab
 
-A production-style AWS infrastructure project built with Terraform, demonstrating
-VPC networking, EKS (Kubernetes), GitOps deployment, observability, and AI/ML
-serving infrastructure.
+A production-style AWS infrastructure project built with Terraform.
+
+**Built and verified today:** VPC networking (3 AZs), an EKS cluster provisioned via
+Terraform, an ECR image registry, and a containerized workload (`sarif`) exposed through
+an Application Load Balancer with a `gp3` EBS-backed PVC.
+
+**Planned for later phases:** CI/CD deployment automation (GitHub Actions), security
+hardening, observability, GitOps, and AI/ML model serving. These are future work — not yet
+demonstrated in this repo.
 
 ## Architecture
 
 ```
-┌─────────────────────────────────────────────────────────────────┐
-│  AWS Account (us-west-2)                                        │
-│                                                                 │
-│  ┌───────────────────────────────────────────────────────────┐  │
-│  │  VPC: 10.0.0.0/16                                        │  │
-│  │                                                           │  │
-│  │  ┌─────────────────────┐  ┌─────────────────────┐        │  │
-│  │  │  AZ: us-west-2a     │  │  AZ: us-west-2b     │        │  │
-│  │  │                     │  │                     │        │  │
-│  │  │  Public: 10.0.1.0/24│  │  Public: 10.0.2.0/24│        │  │
-│  │  │  (NAT GW, ALB)      │  │  (ALB)              │        │  │
-│  │  │                     │  │                     │        │  │
-│  │  │  Private:10.0.10.0/24  │  Private:10.0.20.0/24│       │  │
-│  │  │  (EKS nodes, apps)  │  │  (EKS nodes, apps)  │        │  │
-│  │  │                     │  │                     │        │  │
-│  │  │  Data: 10.0.100.0/24│  │  Data: 10.0.200.0/24│        │  │
-│  │  │  (RDS, ElastiCache)  │  │  (RDS, ElastiCache) │        │  │
-│  │  └─────────────────────┘  └─────────────────────┘        │  │
-│  │                                                           │  │
-│  │  Internet Gateway ──► Public Route Table                  │  │
-│  │  NAT Gateway ──► Private Route Table                      │  │
-│  └───────────────────────────────────────────────────────────┘  │
-│                                                                 │
-│  S3 Bucket: terraform state (remote backend)                    │
-│  DynamoDB Table: terraform state lock                           │
-└─────────────────────────────────────────────────────────────────┘
+AWS Account (us-west-2)
+│
+└─ VPC 10.0.0.0/16
+   │
+   ├─ Availability Zones: us-west-2a, us-west-2b, us-west-2c
+   │
+   ├─ Public subnets   10.0.1.0/24    10.0.2.0/24    10.0.3.0/24     → Internet Gateway
+   │     NAT Gateway (in a public subnet) + Application Load Balancer
+   │
+   ├─ Private subnets  10.0.16.0/20   10.0.32.0/20   10.0.48.0/20    → NAT Gateway
+   │     EKS managed node group (worker nodes) + application pods
+   │
+   └─ Data subnets     10.0.100.0/24  10.0.101.0/24  10.0.102.0/24   (isolated)
+         Reserved for RDS / ElastiCache — not yet provisioned
+
+Regional / account-level (outside the VPC):
+  ECR       sarif image registry — persists across teardowns
+  EKS       cloud-platform-lab-dev — control plane + managed node group
+  S3        Terraform remote state backend
+  DynamoDB  Terraform state lock table
 ```
 
 ## Project Structure
@@ -44,18 +44,23 @@ cloud-platform-lab/
 │   └── cluster.yaml             # Local kind cluster (extraPortMappings 80/443 for nginx ingress)
 ├── environments/
 │   └── dev/
-│       ├── main.tf              # Root module — calls child modules
+│       ├── main.tf              # Networking module + remote-state (S3 bucket, DynamoDB lock)
 │       ├── variables.tf         # Input variables for dev environment
 │       ├── outputs.tf           # Outputs (VPC ID, subnet IDs, etc.)
-│       ├── terraform.tfvars     # Dev-specific values
+│       ├── terraform.tfvars     # 3-AZ VPC + subnet CIDRs
 │       ├── providers.tf         # AWS provider + backend config
-│       └── versions.tf          # Required providers and versions
+│       ├── versions.tf          # Required providers and versions
+│       ├── ecr/                 # ECR repo for the sarif image (persists across teardowns)
+│       ├── eks/                 # EKS cluster, managed node group, IAM/OIDC, KMS, core add-ons
+│       └── eks-platform/        # EBS CSI, gp3 default StorageClass, AWS Load Balancer Controller (IRSA)
 ├── modules/
 │   └── networking/
 │       ├── main.tf              # VPC, subnets, route tables, NAT/IGW
 │       ├── variables.tf         # Module inputs
 │       └── outputs.tf           # Module outputs
-├── TEARDOWN.md                  # Teardown checklist (kind cluster, cost cleanup)
+├── docs/
+│   └── phase-1c-completion.md   # Phase 1C evidence + teardown/recreate proof
+├── TEARDOWN.md                  # Teardown order + cost cleanup checklist
 ├── k8s/
 │   ├── README.md                # Design rationale + local bring-up runbook (interview-ready)
 │   ├── base/                    # Kustomize base — app-agnostic defaults
@@ -71,7 +76,9 @@ cloud-platform-lab/
 │       ├── local/               # nginx ingress, sarif.local host, local image tag
 │       │   ├── configmap-cors-patch.yaml  # CORS_ORIGIN: http://sarif.local
 │       │   └── ingress-patch.yaml         # ingressClassName: nginx, host: sarif.local
-│       └── eks/                 # Wired + deployed in Phase 1C (ALB, ECR image) — verified, see k8s/README.md
+│       └── eks/                 # ALB + ECR image — deployed and verified in Phase 1C
+│           ├── kustomization.yaml         # images newTag:5012516; ingress-patch
+│           └── ingress-patch.yaml         # ingressClassName: alb, internet-facing
 └── k8s-fundamentals/
     ├── k8s-learning-notes.md    # K8s concepts reference
     └── manifests/               # Exercise manifests (Exercises 1-7)
@@ -79,10 +86,26 @@ cloud-platform-lab/
 
 ## Phases
 
-- **Phase 1 (Weeks 1-4):** VPC, networking, remote state, RDS ← *you are here*
-- **Phase 2 (Weeks 5-8):** EKS cluster, node groups, CI/CD for Terraform
-- **Phase 3 (Weeks 9-12):** Kubernetes workloads, ArgoCD/GitOps, observability
-- **Phase 4 (Weeks 13-16):** AI/ML serving (vLLM on K8s), model monitoring
+- **Phase 1A — Kubernetes fundamentals on kind:** ✅ complete
+- **Phase 1B — Sarif on local Kubernetes via Kustomize:** ✅ complete
+- **Phase 1C — EKS via Terraform (ECR, ALB, `gp3` PVC, Pushover, teardown/recreate):** ✅ complete
+- **Phase 1D — GitHub Actions / CI/CD deployment automation:** ⏭️ next
+- **Future — security hardening, observability, GitOps, AI/ML model serving**
+
+## Current status
+
+Phase 1C is complete. The stack was deployed, verified end-to-end, and then fully torn down
+(only the ECR image and the S3/DynamoDB state backend persist):
+
+- ✅ EKS cluster provisioned via Terraform (`environments/dev/eks`)
+- ✅ ECR image `sarif:5012516` deployed to the cluster and verified
+- ✅ Application reachable through an ALB (HTTP-only for this phase — no TLS/domain yet)
+- ✅ `gp3` PVC (EBS CSI) bound; backing EBS volume provisioned and reclaimed on teardown
+- ✅ Pushover notification path verified from inside the pod
+- ✅ Full teardown → recreate → re-verify → teardown cycle proven
+- ⏭️ GitHub Actions / CI/CD deferred to Phase 1D
+
+See [`docs/phase-1c-completion.md`](docs/phase-1c-completion.md) for the full evidence.
 
 ## Prerequisites
 
@@ -113,16 +136,27 @@ terraform plan
 terraform apply
 ```
 
-## Cost Estimate (Dev Environment)
+The EKS stacks (`environments/dev/eks`, then `environments/dev/eks-platform`) are applied
+after networking. See [`docs/phase-1c-completion.md`](docs/phase-1c-completion.md) for the
+full apply/verify sequence and [`TEARDOWN.md`](TEARDOWN.md) for the teardown order.
 
-| Resource        | Estimated Monthly Cost |
-|-----------------|----------------------|
-| NAT Gateway     | ~$32 + data transfer |
-| VPC             | Free                 |
-| Subnets         | Free                 |
-| S3 (state)      | < $1                 |
-| DynamoDB (lock) | < $1                 |
-| **Total (networking only)** | **~$33/mo** |
+## Cost & cleanup
 
-> **Tip:** The NAT Gateway is the main cost driver. Destroy with `terraform destroy`
-> when not actively working to save money.
+Order-of-magnitude only — actual cost depends on region, instance types, and data transfer.
+These are rough figures for reasoning about the main drivers, **not** an authoritative bill.
+
+| Resource (while running)          | Rough order of magnitude              |
+|-----------------------------------|---------------------------------------|
+| EKS control plane                 | tens of $/mo (per-cluster hourly)     |
+| Worker nodes (managed node group) | depends on instance type × count      |
+| NAT Gateway                       | tens of $/mo + data transfer          |
+| Application Load Balancer         | low tens of $/mo + LCU/data           |
+| EBS `gp3` volume(s)               | a few $/mo                            |
+| S3 state + DynamoDB lock          | pennies/mo                            |
+| VPC / subnets / IGW               | free                                  |
+
+> **Cleanup is your responsibility.** The EKS control plane, worker nodes, NAT Gateway, ALB,
+> EBS volumes, and Elastic IPs all bill while running — tear them down when not actively
+> working. Follow [`TEARDOWN.md`](TEARDOWN.md) for the exact order and the final AWS
+> verification checks. The ECR `sarif` repo + image and the S3/DynamoDB state backend are
+> intentionally retained across teardowns.

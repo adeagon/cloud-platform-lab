@@ -62,7 +62,7 @@ This endpoint checks the thing that actually matters for correctness (the DB), n
 
 `envFrom` is cleaner than listing individual `env[].valueFrom` entries — the app reads all these vars anyway, no selective exposure is needed.
 
-**Key precedence note:** when the same key appears in both a ConfigMap and a Secret, the `envFrom` source listed *last* wins. `sarif-secrets` is listed after `sarif-config`, so Secret values take precedence for any duplicate keys (e.g. if `HOST` or `PORT` are present in both, the Secret wins). If the Secret was created with `--from-env-file` from an existing `.env`, be aware of which keys it contains — they silently shadow the ConfigMap values for those keys.
+**Key precedence note:** when the same key appears in both a ConfigMap and a Secret, the `envFrom` source listed *last* wins. `sarif-secrets` is listed after `sarif-config`, so Secret values take precedence for any duplicate keys (e.g. if `HOST` or `PORT` are present in both, the Secret wins). This is one reason to **avoid** creating the Secret with `--from-env-file` from a full `.env`: it silently imports every key in the file, and any that collide with ConfigMap keys shadow them. Prefer explicit `--from-literal` for only the keys the app needs (see "Out-of-band secret management" below).
 
 ### CORS_ORIGIN behavior
 
@@ -76,11 +76,34 @@ This endpoint checks the thing that actually matters for correctness (the DB), n
 
 ### Workflow
 
+**Preferred — create the Secret imperatively with only the allowlisted keys.** This avoids
+committing a secret file and avoids importing a whole `.env` (which would pull in unrelated
+keys). On a fresh cluster the three **required** keys are enough:
+
+```bash
+kubectl create secret generic sarif-secrets -n sarif \
+  --from-literal=SEATS_API_KEY=… \
+  --from-literal=PUSHOVER_TOKEN=… \
+  --from-literal=PUSHOVER_USER_KEY=… \
+  --dry-run=client -o yaml | kubectl apply -f -
+```
+
+Add the **optional** cash-price keys only if you need those endpoints —
+`--from-literal=RAPIDAPI_KEY=…` (→ `GET /api/cashbiz`) and
+`--from-literal=TRAVELPAYOUTS_TOKEN=…` (→ `GET /api/cash`). Without them the app starts
+normally and those two endpoints return HTTP 503.
+
+**Alternative — file-based**, if you prefer to keep values in a gitignored manifest:
+
 ```bash
 cp k8s/base/secret.example.yaml k8s/base/secret.yaml
-# Fill in real values in secret.yaml
-kubectl apply -f k8s/base/secret.yaml  # gitignored; applied manually
+# Fill in real values in secret.yaml (gitignored)
+kubectl apply -f k8s/base/secret.yaml
 ```
+
+Do **not** create the Secret with `--from-env-file=.env` — that imports every key in the
+file, silently shadowing ConfigMap values (see the key-precedence note above) and pulling in
+secrets the app doesn't need.
 
 ### Apply order
 

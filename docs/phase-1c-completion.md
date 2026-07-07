@@ -14,7 +14,9 @@ below for the closing evidence. GitHub Actions / CI/CD remain deferred to Phase 
 - Throwaway PVC test succeeded: PVC bound, EBS volume created, volume deleted on PVC cleanup (no orphan).
 - AWS Load Balancer Controller was verified working with IRSA (`attach_load_balancer_controller_policy=true`).
 - `alb` IngressClass and validating webhook were present.
-- No real ALB was created (no Ingress deployed).
+- No ALB formed during this platform-components-only check because no Ingress was deployed
+  yet. (The Phase 1C app deployment later **did** create and verify a real ALB — see
+  "Phase 1C — live deployment verification" and "Recreate → re-verify" below.)
 - All billable infrastructure was torn down cleanly in the correct order.
 - ECR `sarif` repository remains intact.
 

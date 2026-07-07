@@ -207,7 +207,7 @@ Kustomize is built into `kubectl` — no extra tooling, no templating language t
 
 **HTTP-only ALB:** an intentional Phase 1C lab tradeoff — no ACM cert, Route 53, Cloudflare, or custom domain yet. TLS is deferred to a future phase.
 
-**Phase 1C is not complete** until a teardown → recreate cycle is proven on this overlay (not yet done as of this verification). GitHub Actions changes are deferred to Phase 1D.
+**Phase 1C is complete.** A full teardown → recreate → re-verify cycle was proven on this overlay: infra was destroyed, recreated from committed Terraform with no source changes and no image rebuild, and re-verified — pod `1/1 Running`, PVC `Bound` on `gp3` with the backing EBS volume `in-use`, ALB `active` with a `healthy` target, `/api/health` and `/` both `200` through the ALB, and the Pushover notification path confirmed end-to-end (including catching and fixing a verification-script bug where an early test call used the wrong argument signature and silently sent a hollow "undefined" notification). GitHub Actions changes remain deferred to Phase 1D.
 
 ---
 
@@ -220,7 +220,7 @@ Kustomize is built into `kubectl` — no extra tooling, no templating language t
 | SQLite → managed DB | Required to enable `replicas > 1` and `RollingUpdate`. Future phase. |
 | `Recreate` deployment downtime | During a rollout, Recreate terminates the old pod before starting the new one — brief downtime is unavoidable. Acceptable for a lab environment. Not acceptable for production SLAs; requires moving to a managed database + RollingUpdate to fix. |
 | Single-replica, not highly available | Current deployment is `replicas: 1` and has no redundancy. Production would first move state to a managed database (RDS/Aurora), then run multiple replicas across AZs with PodDisruptionBudgets and topology-spread constraints. With SQLite/RWO, those HA mechanisms don't buy anything today. |
-| EKS overlay | **Verified (Phase 1C)** — wired to the ECR image, deployed, reachable via ALB (HTTP only). See "EKS overlay" section above. Teardown → recreate not yet proven. |
+| EKS overlay | **Verified (Phase 1C)** — wired to the ECR image, deployed, reachable via ALB (HTTP only). Teardown → recreate → re-verify proven. See "EKS overlay" section above. |
 | `.env` / Dockerfile `COPY . .` | **Verified (Session 2):** `app/.dockerignore` excludes `.env` — not baked into the `sarif:local` image. **Re-confirmed (Phase 1C):** same `.dockerignore` audited clean immediately before the first ECR push (tag `5012516`). |
 | Probe scope is shallow | Both probes check `SELECT 1` — this proves the database connection is live, not that it's the *correct* database or the PVC-mounted one. A misconfigured `SARIF_DB_PATH` would cause the app to open a fresh empty database on the container's ephemeral filesystem; the probe would still pass, but persistent data would be silently inaccessible. The fix is always to ensure `SARIF_DB_PATH` points at the PVC mount (`/data/sarif.db`). |
 
@@ -245,6 +245,7 @@ k8s/
       configmap-cors-patch.yaml # CORS_ORIGIN: http://sarif.local
       ingress-patch.yaml        # ingressClassName:nginx, host:sarif.local
     eks/
-      kustomization.yaml        # STUB — Phase 1C
+      kustomization.yaml        # images newTag:5012516; ingress-patch (Phase 1C, verified)
+      ingress-patch.yaml        # ingressClassName:alb, internet-facing, healthcheck-path
   README.md                     # this file
 ```

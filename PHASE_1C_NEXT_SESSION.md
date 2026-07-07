@@ -1,4 +1,8 @@
-# Phase 1C — Next Session Checkpoint
+# Phase 1C — Complete
+
+**Phase 1C is complete.** The full cycle — deploy, teardown, recreate from Terraform,
+re-verify end-to-end, teardown again — has been proven. See "Recreate → re-verify"
+below for the closing evidence. GitHub Actions / CI/CD remain deferred to Phase 1D.
 
 ## Completed state
 
@@ -30,9 +34,9 @@ Sarif was deployed to EKS and verified end-to-end. Evidence:
 - **HTTP-only ALB:** no TLS/ACM/Route 53/Cloudflare/custom domain — an intentional Phase 1C lab tradeoff. TLS is deferred to a future phase (ACM cert + HTTPS listener + host rule + Cloudflare CNAME).
 - **GitHub Actions:** deferred to Phase 1D — no CI/CD changes made this session.
 
-**Phase 1C is not yet complete:** the above proves a clean deploy, and the app was
-afterward fully torn down and confirmed clean (see "Current live AWS state" below).
-What remains is the recreate → re-verify half of the cycle. See Guardrails below.
+The above proves a clean deploy; the app was afterward fully torn down and confirmed
+clean (see "Current live AWS state" below). The recreate → re-verify half of the cycle,
+completing Phase 1C, is documented below under "Recreate → re-verify (closing session)".
 
 ## Current live AWS state
 
@@ -50,32 +54,44 @@ torn down in the documented order (Ingress → app resources/PVC → `eks-platfo
 | ECR `sarif` repo | Intact (`702516017596.dkr.ecr.us-west-2.amazonaws.com/sarif`) |
 | ECR image `sarif:5012516` | Intact, `ACTIVE` |
 
-## Next task
+## Recreate → re-verify (closing session)
 
-Prove the recreate → re-verify half of the cycle (see "Remaining Phase 1C work" below).
-The deploy was verified once and teardown is confirmed clean, but Phase 1C is not
-complete until a fresh recreate from code is re-verified end-to-end.
+Fresh recreate from committed Terraform + Kustomize code, no source changes, no image
+rebuild:
 
-## Remaining Phase 1C work
+- **Networking** (`environments/dev`): `terraform plan`/`apply` — 24 added, 0 changed,
+  0 destroyed.
+- **EKS** (`environments/dev/eks`): 38 added, 0 changed, 0 destroyed. Cluster
+  `cloud-platform-lab-dev`, 2 nodes `Ready`.
+- **eks-platform** (`environments/dev/eks-platform`): 10 added, 0 changed, 0 destroyed.
+  `gp3` default StorageClass, `gp2` de-defaulted, EBS CSI + AWS Load Balancer Controller
+  pods `Running`, `alb` IngressClass present.
+- **`sarif-secrets`** recreated out-of-band with only the 3 allowlisted keys
+  (`SEATS_API_KEY`, `PUSHOVER_TOKEN`, `PUSHOVER_USER_KEY`) — confirmed via
+  `kubectl get secret -o jsonpath` that no other keys were present.
+- **App** (`kubectl apply -k k8s/overlays/eks`) using the already-committed image tag
+  `5012516` — no rebuild.
+- **Re-verification, all passed:**
+  - Pod `1/1 Running`, 0 restarts.
+  - PVC `sarif-data` `Bound` on `gp3`; backing EBS volume `in-use`, `gp3`, 1Gi.
+  - ALB `k8s-sarif-sarif-443c05ee90` `active`, `internet-facing`; target `healthy`.
+  - `GET /api/health` → `200 {"ok":true,"service":"sarif"}`; `GET /` → `200`.
+  - Pushover: `sendNotification({ title, message })` called via `kubectl exec` →
+    `{"ok":true}`; notification received with correct title/message (confirmed by
+    screenshot — an earlier test call using the wrong, positional-args signature
+    produced a hollow "undefined/undefined" notification and was corrected before
+    treating this check as passed).
+- Pre-completion confirmation: `git status` clean, `k8s/overlays/eks/kustomization.yaml`
+  still pinned to tag `5012516`, zero Terraform/Kubernetes source diffs vs the checkpoint
+  commit — the recreate was a faithful replay of committed code.
 
-Build/wire/deploy/verify and teardown are both done (see sections above). The only
-remaining task is the recreate → re-verify half of the cycle:
-
-1. **Recreate infra from Terraform** — `environments/dev`, then `environments/dev/eks`,
-   then `environments/dev/eks-platform`, in that order.
-2. **Recreate `sarif-secrets` out-of-band** — same allowlisted keys as before
-   (`SEATS_API_KEY`, `PUSHOVER_TOKEN`, `PUSHOVER_USER_KEY`).
-3. **Reapply `k8s/overlays/eks`** using the already-committed image tag `5012516` — no
-   rebuild needed, the image is still in ECR.
-4. **Re-verify** — pod readiness, PVC `Bound` on `gp3`, ALB reachable, `/api/health` and
-   frontend both `200` through the ALB, Pushover notification path.
-5. **If that passes, mark Phase 1C complete.** No GitHub Actions changes — that stays
-   deferred to Phase 1D.
+Torn down again after this verification (see teardown log / commit history for the
+second teardown's clean-state confirmation).
 
 ## Guardrails
 
 - No GitHub Actions changes until Phase 1D.
-- Do not claim Phase 1C complete until Sarif is deployed, reachable through ALB, alerts are verified, and a teardown/recreate cycle is proven.
+- Phase 1C is complete: Sarif was deployed, reachable through ALB, alerts verified, and a full teardown → recreate → re-verify → teardown cycle proven. These guardrails still apply to any future infra work on this stack.
 - Always tear down billable resources when stopping, in this exact order:
   1. App resources (Ingress, PVCs) — let controllers reclaim ALBs/volumes.
   2. `environments/dev/eks-platform` — `terraform destroy`

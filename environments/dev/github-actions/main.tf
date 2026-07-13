@@ -93,8 +93,14 @@ resource "aws_iam_role" "github_actions" {
 # proof/debugging without an explicit grant.
 #
 # Kubernetes RBAC (the EKS access entry) is deliberately out of scope for this increment —
-# this stack grants AWS-level permissions only. ECR pull / build-cache actions are omitted
-# until a concrete need appears.
+# this stack grants AWS-level permissions only.
+#
+# ecr:BatchGetImage is included alongside the push actions (not "pull" access in the general
+# sense): docker/build-push-action's default provenance attestation pushes a manifest list
+# referencing the image manifest, and BuildKit issues a HEAD request against that manifest
+# during the push — which requires BatchGetImage. Without it, Increment 3's first real push
+# failed with 403 Forbidden. GetDownloadUrlForLayer (actual layer pull) is still omitted until
+# a concrete need appears.
 
 resource "aws_iam_policy" "github_actions" {
   name        = "${var.project_name}-github-actions"
@@ -118,7 +124,8 @@ resource "aws_iam_policy" "github_actions" {
           "ecr:UploadLayerPart",
           "ecr:CompleteLayerUpload",
           "ecr:PutImage",
-          "ecr:DescribeImages"
+          "ecr:DescribeImages",
+          "ecr:BatchGetImage"
         ]
         Resource = local.ecr_repository_arn
       },

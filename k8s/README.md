@@ -109,10 +109,12 @@ secrets the app doesn't need.
 
 `envFrom.secretRef` is **not** marked `optional`, so the pod will not start until `sarif-secrets` exists. Correct order on a fresh cluster:
 
-1. `kubectl apply -f k8s/base/namespace.yaml` — creates the `sarif` Namespace first, which is required before the Secret can be created in it.
+1. `kubectl apply -f k8s/overlays/local/namespace.yaml` — creates the `sarif` Namespace first, which is required before the Secret can be created in it.
 2. `kubectl apply -f k8s/base/secret.yaml` — creates `sarif-secrets` in the `sarif` namespace.
 3. `kubectl apply -k k8s/overlays/local` — creates all remaining resources (Namespace idempotently, ConfigMap, PVC, Deployment, Service, Ingress).
 4. The Deployment's pod will now start without entering `CreateContainerConfigError`.
+
+(On EKS, the `sarif` Namespace is Terraform-managed by `eks-platform` instead — see `docs/phase-1d-design.md` Q8. `k8s/overlays/eks` does not create it.)
 
 (`secret.yaml` carries `namespace: sarif` explicitly since kustomize doesn't manage it.)
 
@@ -177,7 +179,7 @@ docker build -t sarif:local /path/to/sarif/app
 kind load docker-image sarif:local --name lab
 
 # Apply order: namespace first, then the Secret, then everything else.
-kubectl apply -f k8s/base/namespace.yaml
+kubectl apply -f k8s/overlays/local/namespace.yaml
 # Apply the Secret (placeholder values are sufficient for /api/health):
 kubectl create secret generic sarif-secrets \
   --from-literal=SEATS_API_KEY=placeholder \
@@ -254,8 +256,7 @@ Kustomize is built into `kubectl` — no extra tooling, no templating language t
 ```
 k8s/
   base/
-    kustomization.yaml          # namespace: sarif; resources list (no secret)
-    namespace.yaml
+    kustomization.yaml          # namespace: sarif; resources list (no secret, no namespace)
     configmap.yaml              # 6 config env vars (all quoted strings)
     secret.example.yaml         # TEMPLATE only — never in kustomize resources
     pvc.yaml                    # RWO, 1Gi, default StorageClass
@@ -264,7 +265,8 @@ k8s/
     ingress.yaml                # no host, no ingressClassName (overlays add these)
   overlays/
     local/
-      kustomization.yaml        # images newTag:local; two patches
+      kustomization.yaml        # images newTag:local; namespace.yaml resource; two patches
+      namespace.yaml            # local/kind only — EKS namespace is Terraform-managed (Q8)
       configmap-cors-patch.yaml # CORS_ORIGIN: http://sarif.local
       ingress-patch.yaml        # ingressClassName:nginx, host:sarif.local
     eks/

@@ -65,7 +65,6 @@ cloud-platform-lab/
 │   ├── README.md                # Design rationale + local bring-up runbook (interview-ready)
 │   ├── base/                    # Kustomize base — app-agnostic defaults
 │   │   ├── kustomization.yaml
-│   │   ├── namespace.yaml
 │   │   ├── configmap.yaml       # Non-secret env vars
 │   │   ├── secret.example.yaml  # TEMPLATE only — real secret applied out-of-band
 │   │   ├── pvc.yaml             # SQLite persistence (ReadWriteOnce, 1Gi)
@@ -74,6 +73,7 @@ cloud-platform-lab/
 │   │   └── ingress.yaml         # No host/class in base (overlays add these)
 │   └── overlays/
 │       ├── local/               # nginx ingress, sarif.local host, local image tag
+│       │   ├── namespace.yaml             # local/kind only — EKS namespace is Terraform-managed
 │       │   ├── configmap-cors-patch.yaml  # CORS_ORIGIN: http://sarif.local
 │       │   └── ingress-patch.yaml         # ingressClassName: nginx, host: sarif.local
 │       └── eks/                 # ALB + ECR image — deployed and verified in Phase 1C

@@ -2,7 +2,6 @@ apiVersion: kustomize.config.k8s.io/v1beta1
 kind: Kustomization
 namespace: sarif
 resources:
-  - namespace.yaml
   - configmap.yaml
   - pvc.yaml
   - deployment.yaml
@@ -11,3 +10,9 @@ resources:
 # secret.example.yaml is a committed TEMPLATE only. Secrets are applied out-of-band,
 # so it is deliberately NOT listed here — `kubectl apply -k` never renders or
 # overwrites the real Secret with placeholder values. See k8s/README.md.
+#
+# namespace.yaml is deliberately NOT listed here either. Namespace ownership is
+# environment-specific: on EKS, Terraform (eks-platform) owns namespace/sarif so
+# Kustomize must not also assert it (dual ownership = perpetual plan drift). For
+# local/kind, there is no Terraform-managed cluster, so k8s/overlays/local carries
+# its own copy of namespace.yaml and lists it directly. See k8s/README.md.

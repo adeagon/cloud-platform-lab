@@ -149,14 +149,16 @@ Full GitOps (Argo CD Image Updater, Flux) would commit the running tag back to g
 
 **Why this isn't free:** `k8s/base/kustomization.yaml` currently lists `namespace.yaml` in its `resources:`, so `kubectl apply -k` already creates the Namespace today. Moving ownership to Terraform without changing this creates dual ownership: Terraform's `eks-platform` stack and Kustomize would both assert the Namespace object, and any label drift between the two (the current `namespace.yaml` sets `app.kubernetes.io/name: sarif` and `app.kubernetes.io/part-of: sarif`) would show up as perpetual `terraform plan` diff noise.
 
-**Resolution: Option 2.**
-- Remove `namespace.yaml` from `k8s/base/kustomization.yaml`'s `resources:`.
-- Add it explicitly as a resource in `k8s/overlays/local/kustomization.yaml`, so local/kind development stays one-command with no separate manual apply step.
+**Resolution: Option 2, implemented as a file move (not a same-file reference).**
+- Move `k8s/base/namespace.yaml` to `k8s/overlays/local/namespace.yaml` and remove it from `k8s/base/kustomization.yaml`'s `resources:`.
+- List it as a resource directly in `k8s/overlays/local/kustomization.yaml`, so local/kind development stays one-command with no separate manual apply step.
 - Omit it from `k8s/overlays/eks/kustomization.yaml`, so `eks-platform`'s Terraform-managed Namespace has sole ownership on EKS — no dual-ownership drift.
 
-Precedent already exists in this repo for excluding a resource from `base` deliberately and documenting why: `secret.example.yaml` is committed but intentionally not listed in `kustomization.yaml`'s `resources:`, with a comment explaining the reasoning. The same pattern applies here.
+**Correction from the original planning pass:** the `secret.example.yaml` precedent cited below only shows the pattern of *excluding* a resource from `base`'s `resources:` list while still committing the file — it does not mean the file can stay physically in `base/` and be referenced from another overlay. Kustomize's default load restrictor (`LoadRestrictionsRootOnly`) forbids an overlay from listing a resource file that lives outside its own root, so `k8s/overlays/local/kustomization.yaml` cannot reference `../../base/namespace.yaml`. The manifest must physically live inside the overlay that uses it. This is why the resolution above is a `git mv`, not just a `kustomization.yaml` edit — and matches this document's own completion criteria (namespace.yaml "present only in `k8s/overlays/local`").
 
-**Architecturally decided; not yet implemented.** This planning pass records the decision — actually editing `k8s/base/kustomization.yaml`, `k8s/overlays/local/kustomization.yaml`, and `k8s/overlays/eks/kustomization.yaml` happens in implementation step 2 below, not here.
+Precedent already exists in this repo for excluding a resource from `base` deliberately and documenting why: `secret.example.yaml` is committed but intentionally not listed in `kustomization.yaml`'s `resources:`, with a comment explaining the reasoning. The same *exclusion* pattern applies to `base`'s kustomization here — the difference is that the namespace manifest itself relocates with it, since (unlike the secret template) it needs to actually be applied somewhere.
+
+**Implemented in Phase 1D Increment 4 (implementation step 7).**
 
 ---
 
@@ -178,12 +180,12 @@ No changes required here — this section records that existing discipline exten
 ## Implementation sequence
 
 1. Write this design decisions document. *(this document)*
-2. Review it against the current repository structure — including implementing the Q8 namespace overlay split (remove `namespace.yaml` from `base`, add to `local`, omit from `eks`).
+2. Review it against the current repository structure — including deciding the Q8 namespace overlay split (move `namespace.yaml` from `base` to `local`, omit from `eks`). Decision recorded here; implemented in step 7.
 3. Commit the planning document.
 4. Add the CI validation workflow (test / audit / build only — no AWS credentials; de-risks pipeline shape before adding OIDC complexity).
 5. Add persistent GitHub OIDC Terraform (`environments/dev/github-actions`: provider, role, policy).
 6. Prove OIDC authentication + ECR push in isolation.
-7. Add the ephemeral EKS access entry + access policy association in `eks-platform`, plus the resolved namespace-ownership change from step 2.
+7. Add the ephemeral EKS access entry + access policy association in `eks-platform`, plus implement the namespace-ownership change decided in step 2 (`git mv k8s/base/namespace.yaml` to `k8s/overlays/local/namespace.yaml`).
 8. Prove `workflow_dispatch` deployment end-to-end.
 9. Enable automatic deployment on push to `main`, with the cluster-absent preflight in place.
 10. Tear everything down, confirm the preflight skip path fires correctly on a real merge with no cluster present, and document the completed architecture.

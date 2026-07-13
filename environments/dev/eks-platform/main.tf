@@ -208,3 +208,59 @@ resource "helm_release" "aws_load_balancer_controller" {
 
   depends_on = [kubernetes_service_account_v1.lbc]
 }
+
+########################################
+# sarif Namespace — Terraform-owned on EKS (Q8)
+########################################
+# eks-platform is the sole owner of namespace/sarif on EKS going forward. Kustomize's
+# k8s/base no longer lists namespace.yaml as a resource, and k8s/overlays/eks does not
+# reintroduce it — only k8s/overlays/local carries its own copy (for kind). Labels
+# mirror k8s/overlays/local/namespace.yaml so there is no drift between environments.
+
+resource "kubernetes_namespace_v1" "sarif" {
+  metadata {
+    name = "sarif"
+    labels = {
+      "app.kubernetes.io/name"    = "sarif"
+      "app.kubernetes.io/part-of" = "sarif"
+    }
+  }
+}
+
+########################################
+# GitHub Actions CI/CD role — EKS access entry
+########################################
+# The GitHub Actions role is an external IAM principal (not a pod), so IRSA does not
+# apply here — access entries are the RBAC mechanism on this cluster, which already
+# runs authentication_mode = "API" (no aws-auth ConfigMap path). principal_arn comes
+# from the persistent github-actions stack's remote state, not hardcoded.
+
+resource "aws_eks_access_entry" "github_actions" {
+  cluster_name  = data.aws_eks_cluster.this.name
+  principal_arn = data.terraform_remote_state.github_actions.outputs.github_actions_role_arn
+  type          = "STANDARD"
+
+  tags = {
+    Component = "github-actions-cicd"
+  }
+}
+
+########################################
+# GitHub Actions CI/CD role — namespace-scoped EKSEditPolicy (Q7)
+########################################
+# AmazonEKSEditPolicy scoped to namespace "sarif" only — namespace-scoped least-damage,
+# not cluster-admin. Broader than a custom deploy-specific RBAC policy; accepted as an
+# MVP limitation per the design doc (custom RBAC is future hardening, not implemented here).
+
+resource "aws_eks_access_policy_association" "github_actions_edit" {
+  cluster_name  = data.aws_eks_cluster.this.name
+  principal_arn = data.terraform_remote_state.github_actions.outputs.github_actions_role_arn
+  policy_arn    = "arn:aws:eks::aws:cluster-access-policy/AmazonEKSEditPolicy"
+
+  access_scope {
+    type       = "namespace"
+    namespaces = ["sarif"]
+  }
+
+  depends_on = [aws_eks_access_entry.github_actions]
+}

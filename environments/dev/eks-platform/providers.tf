@@ -33,6 +33,17 @@ data "terraform_remote_state" "eks" {
   }
 }
 
+# Persistent GitHub Actions IAM role (environments/dev/github-actions). Read-only:
+# that stack reads no state back, so this is a one-directional reference, no cycle.
+data "terraform_remote_state" "github_actions" {
+  backend = "s3"
+  config = {
+    bucket = "cloud-platform-lab-tfstate"
+    key    = "environments/dev/github-actions/terraform.tfstate"
+    region = "us-west-2"
+  }
+}
+
 data "aws_eks_cluster" "this" {
   name = data.terraform_remote_state.eks.outputs.cluster_name
 }

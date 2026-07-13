@@ -18,14 +18,15 @@ dependency order.
       `kubectl -n sarif delete secret sarif-secrets`
 - [ ] **Wait for the backing EBS volume to be deleted** — confirm no orphan `available`
       volume remains: `aws ec2 describe-volumes --filters Name=status,Values=available`
-- [ ] **Delete the namespace** (only after EBS cleanup is confirmed):
-      `kubectl delete namespace sarif`
 
 ## Terraform stacks (reverse dependency order)
 
 - [ ] **Destroy `environments/dev/eks-platform`** (EBS CSI, gp3 SC, AWS Load Balancer
-      Controller, IRSA): `terraform -chdir=environments/dev/eks-platform apply` a
+      Controller, IRSA, GitHub Actions EKS access entry, `namespace/sarif`):
+      `terraform -chdir=environments/dev/eks-platform apply` a
       `plan -destroy`
+      (this also deletes the `sarif` Namespace — Terraform owns it, not Kustomize; no
+      separate `kubectl delete namespace sarif` step, see `docs/phase-1d-design.md` Q8)
 - [ ] **Destroy `environments/dev/eks`** (cluster, node group, IAM/OIDC, KMS, add-ons):
       `terraform -chdir=environments/dev/eks apply` a `plan -destroy`
 - [ ] **Targeted destroy of networking** in `environments/dev` (leaves the S3 state bucket

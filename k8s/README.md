@@ -232,7 +232,60 @@ Kustomize is built into `kubectl` — no extra tooling, no templating language t
 
 **HTTP-only ALB:** an intentional Phase 1C lab tradeoff — no ACM cert, Route 53, Cloudflare, or custom domain yet. TLS is deferred to a future phase.
 
-**Phase 1C is complete.** A full teardown → recreate → re-verify cycle was proven on this overlay: infra was destroyed, recreated from committed Terraform with no source changes and no image rebuild, and re-verified — pod `1/1 Running`, PVC `Bound` on `gp3` with the backing EBS volume `in-use`, ALB `active` with a `healthy` target, `/api/health` and `/` both `200` through the ALB, and the Pushover notification path confirmed end-to-end (including catching and fixing a verification-script bug where an early test call used the wrong argument signature and silently sent a hollow "undefined" notification). GitHub Actions changes remain deferred to Phase 1D.
+**Phase 1C is complete.** A full teardown → recreate → re-verify cycle was proven on this overlay: infra was destroyed, recreated from committed Terraform with no source changes and no image rebuild, and re-verified — pod `1/1 Running`, PVC `Bound` on `gp3` with the backing EBS volume `in-use`, ALB `active` with a `healthy` target, `/api/health` and `/` both `200` through the ALB, and the Pushover notification path confirmed end-to-end (including catching and fixing a verification-script bug where an early test call used the wrong argument signature and silently sent a hollow "undefined" notification). GitHub Actions CI/CD was implemented and proven in Phase 1D — see below.
+
+---
+
+## GitHub Actions CI/CD (Phase 1D)
+
+Full design rationale and Q&A live in [`docs/phase-1d-design.md`](../docs/phase-1d-design.md). This section is the short version, for the runbook.
+
+### Pipeline stages
+
+The workflow (`sarif/.github/workflows/ci.yml`) has three jobs, each gated more tightly than the last:
+
+```
+validate  (ubuntu-latest)        every push, pull_request, and workflow_dispatch — no AWS credentials
+   ↓ needs: validate
+publish   (ubuntu-latest)        push to main / workflow_dispatch only — OIDC → ECR
+   ↓ needs: publish
+deploy    (self-hosted runner)   workflow_dispatch from main only — OIDC → EKS
+```
+
+`validate` runs `npm ci` → `npm test` → `npm audit --omit=dev` (hard gate) → `npm run build`, identically on every trigger, with zero AWS exposure. The configured `deploy` job does not run on `pull_request` events (defense-in-depth, not a complete security boundary — see "Why `deploy` needs a self-hosted runner" below). A push to `main` validates, builds, and publishes only; deployment itself is manual-only (`workflow_dispatch`) — see "Steady-state trigger" in `docs/phase-1d-design.md` for why.
+
+### OIDC trust model
+
+Neither `publish` nor `deploy` uses a static AWS access key. Each independently exchanges a short-lived GitHub OIDC token for temporary AWS credentials (`aws-actions/configure-aws-credentials`) by assuming `arn:aws:iam::702516017596:role/cloud-platform-lab-github-actions`. The role's trust policy pins the OIDC `sub` claim to `repo:adeagon/sarif:ref:refs/heads/main` — no other repo, branch, or tag can assume it, and no long-lived credential is ever stored in GitHub.
+
+### Why `deploy` needs a self-hosted runner
+
+The EKS cluster's public API endpoint is deliberately restricted to a single allowlisted operator IP (`environments/dev/eks/terraform.tfvars`). A GitHub-hosted runner can complete OIDC and `aws eks update-kubeconfig` (both AWS control-plane APIs, unaffected by the cluster's endpoint CIDR), but every `kubectl` call to the cluster's own API server would then hang and time out. `deploy` therefore runs on a **temporary, repository-level self-hosted runner** on a host whose network egress already matches the allowlisted IP — it must be registered and online *before* an operator dispatches a deployment, and is deregistered immediately after, never left running in between. `validate` and `publish` have no such requirement and stay on `ubuntu-latest`. The alternative — widening the endpoint CIDR or allowlisting GitHub's runner IP ranges — was rejected as an unnecessary security regression for a single-operator lab cluster; see `docs/phase-1d-design.md` for the full tradeoff.
+
+Because that runner is temporary and not always present, `deploy` is deliberately restricted to `workflow_dispatch` in steady state — a push-triggered `deploy` would otherwise queue a job with no runner ever available to claim it. See `docs/phase-1d-design.md` ("Steady-state trigger") for the full reasoning and the one-time automatic-deploy proof this corrects.
+
+### Image-tagging strategy
+
+Every CI-built image is tagged with the full 40-character `github.sha` — never `latest`, never the short SHA. `publish` checks ECR for that exact tag before building: if it already exists, the build/push steps are skipped (idempotent reruns, compatible with ECR's immutable tags); if not, it builds and pushes. `deploy` patches the `eks` overlay's image reference to that same tag at runtime (`kustomize edit set image`) and never commits the change back to this repository.
+
+### CI/CD, not GitOps
+
+This is CI/CD: the pipeline pushes an artifact and applies it directly. It is deliberately not GitOps — the exact image currently running is not mirrored back into this repository; it lives only in the live Deployment (`kubectl get deployment sarif -n sarif -o jsonpath='{.spec.template.spec.containers[0].image}'`) and in ECR. Full GitOps (Argo CD Image Updater, Flux) would commit the running tag back to git so a checkout always reflects cluster state — legitimate future work, out of scope here. See `docs/phase-1d-design.md` Q6 for the full tradeoff.
+
+### Secret restoration after cluster recreation
+
+`sarif-secrets` is never managed by CI (see "Out-of-band secret management" above) — this extends unchanged into the pipeline. When the cluster/namespace is recreated, the Secret does not survive and must be restored manually, once, before the next deploy: verify with `kubectl get secret sarif-secrets -n sarif` (name/type/key-count only, never values), and if absent, recreate it with the same explicit `--from-literal` allowlist process described above, sourced from a local, gitignored env file. The GitHub Actions workflow never creates, reads, lists, or modifies Secret values at any point.
+
+### Temporary self-hosted runner — setup/removal, at a high level
+
+1. Confirm no external fork-PR workflow runs are pending; temporarily tighten the repo's fork-PR approval setting to require approval for all external contributors (public-repo self-hosted-runner risk mitigation).
+2. Register a repository-level runner with a dedicated custom label (so only the `deploy` job can land on it), and start it interactively — not as a persistent background service. It must be online *before* the next step.
+3. Trigger the deployment via `workflow_dispatch` on `main` — `deploy` does not run on an ordinary push (see "Steady-state trigger" in `docs/phase-1d-design.md`).
+4. Immediately after: stop the runner, deregister it from GitHub, and restore the fork-PR approval setting.
+
+The runner authenticates to AWS purely via OIDC (no local AWS credentials required on the host), so it can in principle run under a minimal, dedicated non-admin account with no personal data — the workflow places no dependency on the host beyond network egress through the allowlisted IP and a handful of standard CLIs.
+
+**Verified (Phase 1D):** a `workflow_dispatch` deployment and an independent same-SHA `workflow_dispatch` idempotency re-run both proven live — image match, PVC `Bound` on `gp3`, ALB healthy, `/api/health` and `/` both `200`, and (on the second run) every applied resource reported `unchanged` with zero rebuild. Automatic push-triggered deployment was also deliberately proven once, under `deploy`'s original (since-corrected) trigger condition, as evidence that path works end-to-end — it is not how `deploy` currently triggers; steady state is `workflow_dispatch`-only. Full evidence in `docs/phase-1d-design.md` ("Increment 5 — proven final architecture"). The cluster-absent preflight (skip deploy cleanly when the cluster is intentionally torn down) is not yet implemented — deferred to a follow-up increment, and is a separate concern from the trigger-condition correction above.
 
 ---
 
@@ -246,6 +299,7 @@ Kustomize is built into `kubectl` — no extra tooling, no templating language t
 | `Recreate` deployment downtime | During a rollout, Recreate terminates the old pod before starting the new one — brief downtime is unavoidable. Acceptable for a lab environment. Not acceptable for production SLAs; requires moving to a managed database + RollingUpdate to fix. |
 | Single-replica, not highly available | Current deployment is `replicas: 1` and has no redundancy. Production would first move state to a managed database (RDS/Aurora), then run multiple replicas across AZs with PodDisruptionBudgets and topology-spread constraints. With SQLite/RWO, those HA mechanisms don't buy anything today. |
 | EKS overlay | **Verified (Phase 1C)** — wired to the ECR image, deployed, reachable via ALB (HTTP only). Teardown → recreate → re-verify proven. See "EKS overlay" section above. |
+| Cluster-absent preflight | Not yet implemented. `deploy` currently assumes the EKS cluster is present; it does not check first and skip cleanly if the cluster has been intentionally torn down. Deferred to a follow-up increment — see `docs/phase-1d-design.md` Q3 and Completion criteria. |
 | `.env` / Dockerfile `COPY . .` | **Verified (Session 2):** `app/.dockerignore` excludes `.env` — not baked into the `sarif:local` image. **Re-confirmed (Phase 1C):** same `.dockerignore` audited clean immediately before the first ECR push (tag `5012516`). |
 | Probe scope is shallow | Both probes check `SELECT 1` — this proves the database connection is live, not that it's the *correct* database or the PVC-mounted one. A misconfigured `SARIF_DB_PATH` would cause the app to open a fresh empty database on the container's ephemeral filesystem; the probe would still pass, but persistent data would be silently inaccessible. The fix is always to ensure `SARIF_DB_PATH` points at the PVC mount (`/data/sarif.db`). |
 

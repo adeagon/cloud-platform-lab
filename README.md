@@ -3,11 +3,15 @@
 A production-style AWS infrastructure project built with Terraform.
 
 **Built and verified today:** VPC networking (3 AZs), an EKS cluster provisioned via
-Terraform, an ECR image registry, and a containerized workload (`sarif`) exposed through
-an Application Load Balancer with a `gp3` EBS-backed PVC.
+Terraform, an ECR image registry, a containerized workload (`sarif`) exposed through
+an Application Load Balancer with a `gp3` EBS-backed PVC, and a GitHub Actions CI/CD
+pipeline (OIDC, no static AWS keys): pushes to `main` validate, build, and publish to ECR;
+deployment to EKS is a deliberate `workflow_dispatch` action against a temporary,
+purpose-registered runner (automatic push-triggered deployment was proven once, as a
+one-time demonstration — see `docs/phase-1d-design.md`).
 
-**Planned for later phases:** CI/CD deployment automation (GitHub Actions), security
-hardening, observability, GitOps, and AI/ML model serving. These are future work — not yet
+**Planned for later phases:** cluster-absent deploy preflight, security hardening,
+observability, GitOps, and AI/ML model serving. These are future work — not yet
 demonstrated in this repo.
 
 ## Architecture
@@ -52,14 +56,17 @@ cloud-platform-lab/
 │       ├── versions.tf          # Required providers and versions
 │       ├── ecr/                 # ECR repo for the sarif image (persists across teardowns)
 │       ├── eks/                 # EKS cluster, managed node group, IAM/OIDC, KMS, core add-ons
-│       └── eks-platform/        # EBS CSI, gp3 default StorageClass, AWS Load Balancer Controller (IRSA)
+│       ├── eks-platform/        # EBS CSI, gp3 default StorageClass, AWS Load Balancer Controller (IRSA),
+│       │                        # Terraform-owned sarif namespace, GitHub Actions EKS access entry
+│       └── github-actions/      # Persistent GitHub OIDC provider + IAM role/policy for CI/CD (Phase 1D)
 ├── modules/
 │   └── networking/
 │       ├── main.tf              # VPC, subnets, route tables, NAT/IGW
 │       ├── variables.tf         # Module inputs
 │       └── outputs.tf           # Module outputs
 ├── docs/
-│   └── phase-1c-completion.md   # Phase 1C evidence + teardown/recreate proof
+│   ├── phase-1c-completion.md   # Phase 1C evidence + teardown/recreate proof
+│   └── phase-1d-design.md       # Phase 1D CI/CD design decisions + Increment 5 evidence
 ├── TEARDOWN.md                  # Teardown order + cost cleanup checklist
 ├── k8s/
 │   ├── README.md                # Design rationale + local bring-up runbook (interview-ready)
@@ -89,23 +96,29 @@ cloud-platform-lab/
 - **Phase 1A — Kubernetes fundamentals on kind:** ✅ complete
 - **Phase 1B — Sarif on local Kubernetes via Kustomize:** ✅ complete
 - **Phase 1C — EKS via Terraform (ECR, ALB, `gp3` PVC, Pushover, teardown/recreate):** ✅ complete
-- **Phase 1D — GitHub Actions / CI/CD deployment automation:** ⏭️ next
-- **Future — security hardening, observability, GitOps, AI/ML model serving**
+- **Phase 1D — GitHub Actions / CI/CD deployment automation:** ✅ core pipeline complete (OIDC → ECR → EKS deploy, proven live twice); cluster-absent deploy preflight deferred
+- **Future — cluster-absent preflight, security hardening, observability, GitOps, AI/ML model serving**
 
 ## Current status
 
-Phase 1C is complete. The stack was deployed, verified end-to-end, and then fully torn down
-(only the ECR image and the S3/DynamoDB state backend persist):
+Phase 1C is complete, and Phase 1D's core CI/CD pipeline is implemented and proven live
+against the running stack (cluster currently up, pending teardown approval):
 
 - ✅ EKS cluster provisioned via Terraform (`environments/dev/eks`)
-- ✅ ECR image `sarif:5012516` deployed to the cluster and verified
+- ✅ GitHub Actions CI/CD: push to `main` runs validate → publish (OIDC → ECR, idempotent
+  full-SHA tags); deploy (OIDC → EKS) is `workflow_dispatch`-only in steady state, proven
+  live plus an independent same-SHA idempotency rerun. Automatic push-triggered deployment
+  was also deliberately proven once, as historical evidence, under a trigger condition since
+  corrected — see `docs/phase-1d-design.md` ("Steady-state trigger")
+- ✅ ECR image `sarif:3a3ea27983d38815f9fced71abb88cf2edf81a7d` deployed via CI and verified
 - ✅ Application reachable through an ALB (HTTP-only for this phase — no TLS/domain yet)
 - ✅ `gp3` PVC (EBS CSI) bound; backing EBS volume provisioned and reclaimed on teardown
 - ✅ Pushover notification path verified from inside the pod
-- ✅ Full teardown → recreate → re-verify → teardown cycle proven
-- ⏭️ GitHub Actions / CI/CD deferred to Phase 1D
+- ✅ Full teardown → recreate → re-verify → teardown cycle proven (Phase 1C)
+- ⏭️ Cluster-absent deploy preflight deferred to a follow-up increment
 
-See [`docs/phase-1c-completion.md`](docs/phase-1c-completion.md) for the full evidence.
+See [`docs/phase-1c-completion.md`](docs/phase-1c-completion.md) and
+[`docs/phase-1d-design.md`](docs/phase-1d-design.md) for the full evidence.
 
 ## Prerequisites
 

@@ -1,6 +1,6 @@
 # Phase 1D — GitHub Actions CI/CD Design Decisions
 
-**Status:** Planning only. No Terraform, Kubernetes manifests, GitHub Actions workflows, or application code have been changed to produce this document. No AWS resources were created.
+**Status:** Increments 1–5 implemented and proven live (see "Increment 5 — proven final architecture" below). Increments 1–4 shipped the validate/publish pipeline, GitHub OIDC IAM stack, and the Terraform-owned `sarif` namespace with a namespace-scoped EKS access entry. Increment 5 added the `deploy` job and proved the complete path end-to-end, twice, against the live cluster.
 
 **Phase 1C status:** Complete (commit `ce2f72b`). EKS cluster, ECR repo, and the full deploy → teardown → recreate from committed code → re-verify → teardown cycle were proven with zero source changes required on the second pass.
 
@@ -177,6 +177,75 @@ No changes required here — this section records that existing discipline exten
 
 ---
 
+## Increment 5 — proven final architecture
+
+Increment 5 implemented and proved the `deploy` job end-to-end, live, twice. One load-bearing discovery during implementation changed the job's `runs-on:` from the original Q4 assumption — documented here as the authoritative as-built architecture.
+
+### Why `deploy` runs on a self-hosted runner, not `ubuntu-latest`
+
+The EKS cluster's public API endpoint is intentionally restricted to a single allowlisted operator IP (`environments/dev/eks/terraform.tfvars`: `endpoint_public_access_cidrs`). GitHub-hosted runners egress from a large, rotating IP pool and can never match that `/32`. Consequence: a GitHub-hosted `deploy` job can complete OIDC (`aws sts get-caller-identity`) and `aws eks update-kubeconfig` — both are AWS control-plane APIs, not gated by the cluster's endpoint CIDR — but every subsequent `kubectl` call to the Kubernetes API server would hang until timeout.
+
+**Decision:** `deploy` runs on a **temporary, repository-level self-hosted GitHub Actions runner** on the operator's Mac, whose network egress already matches the allowlisted IP. This was evaluated against two alternatives and rejected them both, in order to avoid any change to security posture:
+- Widen `endpoint_public_access_cidrs` to `0.0.0.0/0` — rejected: reopens the cluster's Kubernetes API to the public internet.
+- Allowlist GitHub-hosted runner IP ranges — rejected: that range is large, third-party-controlled, and rotates; it is not a meaningfully narrower exposure than open access.
+
+`validate` and `publish` remain on `ubuntu-latest` — only `deploy` needs to reach the cluster's API server, so only `deploy` needs to run where that reachability exists. No Terraform, IAM, EKS access entry, or endpoint CIDR was changed to make this work.
+
+**Operational model — temporary, not standing infrastructure.** The runner is public-repository-aware risk: `adeagon/sarif` is public, and GitHub explicitly advises against self-hosted runners on public repos, since a job assigned to the runner during a `pull_request` event would execute attacker-controlled checked-out code on the runner's host. This is accepted only as a narrow, time-boxed exception, with controls, not a permanent architecture:
+- The configured deploy job does not run on `pull_request` events — its `if:` requires `github.event_name == 'workflow_dispatch'` (see "Steady-state trigger" below) and `github.ref == 'refs/heads/main'`. (Defense-in-depth, not a complete security boundary — see below.)
+- Before registering the runner: confirm zero open/queued/approved/running fork-PR workflow runs; temporarily tighten the repo's fork-PR workflow approval to `all_external_contributors` (the strictest available policy).
+- The runner is registered and started immediately before a dispatched deployment, kept online only for the duration of that run, then immediately stopped and deregistered (`./config.sh remove`), and the fork-PR approval setting is restored afterward.
+- `runs-on: [self-hosted, sarif-deploy]` — a custom label scopes it so no other job in the workflow can land on it by accident.
+- `timeout-minutes: 30` bounds any abandoned run.
+
+### Steady-state trigger: `workflow_dispatch` only, not every push
+
+`deploy`'s `if:` condition was corrected after the Increment 5 proof runs. It originally read `github.event_name != 'pull_request' && github.ref == 'refs/heads/main'` — meaning *every* push to `main`, not just the deliberate proof, would queue a `deploy` job. That is a real operational contradiction, distinct from the cluster-absent preflight (below): the only runner able to claim that job (`[self-hosted, sarif-deploy]`) is intentionally deregistered immediately after each use, so an ordinary future push to `main` would queue a `deploy` job with no runner ever available to pick it up.
+
+**Corrected condition:** `if: github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main'`. In steady state:
+- A push to `main` runs `validate` → `publish` only — the image is built and published, ready to deploy, but nothing deploys automatically.
+- Deployment happens only when an operator explicitly triggers `workflow_dispatch` on `main`. A temporary runner must be registered and online *before* that dispatch — since dispatch is a manual, operator-initiated action, the operator controls exactly when the runner needs to exist, rather than the runner needing to be always-on to catch an unpredictable push.
+
+This is separate from the deferred cluster-absent preflight: the preflight question is *what `deploy` should do* when the cluster doesn't exist; this correction is about *when `deploy` should run at all*, given that its only capable runner is deliberately non-persistent.
+
+**Historical evidence unaffected:** the initial deploy run ([29290997161](https://github.com/adeagon/sarif/actions/runs/29290997161)) executed under the original, since-corrected condition, as a deliberate one-time proof that automatic push-triggered deployment works end-to-end while a runner is online. It remains valid evidence of that specific claim — it does not describe the corrected steady-state behavior, which now requires manual dispatch.
+
+### As-built pipeline (differs from the original Q3/Q4 plan)
+
+```
+validate  →  ubuntu-latest        (all events: push, pull_request, workflow_dispatch)
+publish   →  ubuntu-latest        (push to main / workflow_dispatch; OIDC; idempotent ECR reuse by full-SHA tag)
+deploy    →  workflow_dispatch from main only   ([self-hosted, sarif-deploy]; OIDC; temporary runner registered before dispatch)
+```
+
+- **OIDC is used by both `publish` and `deploy`** (not deploy alone) — each job independently assumes `arn:aws:iam::702516017596:role/cloud-platform-lab-github-actions` via `aws-actions/configure-aws-credentials`, scoped to only the permissions it needs (`id-token: write` + `contents: read`).
+- **Immutable full-`github.sha` image tags** — exactly as decided in Q5; proven with a real 40-character tag end-to-end.
+- **Runtime `kustomize edit set image`, never committed back** — the `deploy` job checks out `cloud-platform-lab` at a pinned commit, patches the `eks` overlay's image reference in the ephemeral runner workspace, applies it, and discards the checkout. `cloud-platform-lab` shows zero local diff after every run — confirmed live.
+- **Cluster-absent preflight (`aws eks describe-cluster` branching from Q3) was explicitly out of scope for Increment 5** and was not implemented — `deploy` currently assumes the cluster is present. This remains deferred to a later increment (see Completion criteria below).
+- **EKS access entry**: namespace-scoped `AmazonEKSEditPolicy` on `sarif` (Q7, unchanged) — proven sufficient for the full `apply` / `rollout status` / `get` sequence used by `deploy`.
+- **`sarif` namespace remains Terraform-owned** (Q8, unchanged) — `deploy`'s `kubectl apply -k` never asserts a Namespace object; confirmed by a **clean `terraform -chdir=environments/dev/eks-platform plan`** ("No changes. Your infrastructure matches the configuration.") run immediately after a live deployment, closing out the Q8 completion criterion for real rather than by inspection.
+- **Secret handling unchanged (Q9)**: after the namespace/cluster recreation in Increment 4, `sarif-secrets` did not exist. It was recreated **manually, out-of-band**, from the operator's locally gitignored `sarif/app/.env`, using the existing explicit `--from-literal` allowlist process (only `SEATS_API_KEY`, `PUSHOVER_TOKEN`, `PUSHOVER_USER_KEY` required; optional keys included only if present). No value was ever printed, logged, or committed. **`ci.yml` does not create, read, list, or modify Secrets at any point** — this was a one-time operator action, not a CI capability.
+- **Runner lifecycle**: registered immediately before the proof, deregistered immediately after (`total_count: 0` confirmed on GitHub afterward) — see "Operational model" above.
+
+### Evidence
+
+- `sarif` commit: `3a3ea27983d38815f9fced71abb88cf2edf81a7d` ("ci: deploy Sarif to EKS")
+- Initial deploy run (push-triggered, under the original since-corrected trigger condition — see "Steady-state trigger" above): [run 29290997161](https://github.com/adeagon/sarif/actions/runs/29290997161)
+- Same-SHA idempotency run (`workflow_dispatch`): [run 29291839523](https://github.com/adeagon/sarif/actions/runs/29291839523)
+- Assumed role (both `publish` and `deploy`): `arn:aws:sts::702516017596:assumed-role/cloud-platform-lab-github-actions/GitHubActions`
+- Deployed image: `702516017596.dkr.ecr.us-west-2.amazonaws.com/sarif:3a3ea27983d38815f9fced71abb88cf2edf81a7d` — verified via `kubectl get deployment sarif -n sarif -o jsonpath='{.spec.template.spec.containers[0].image}'` to exactly equal the published tag, both runs.
+- Deployment: `READY 1/1`, `AVAILABLE 1`. Pod: `Running`, `1/1` Ready, **0 restarts**.
+- PVC `sarif-data`: **Bound**, `gp3`, 1Gi, RWO — same underlying volume (`pvc-cf85018c-e1f8-4fe9-bdcb-ef8cc81b536a`) across both runs, confirming CI never recreates it.
+- Ingress/ALB: `k8s-sarif-sarif-443c05ee90-1824879093.us-west-2.elb.amazonaws.com`, `internet-facing`, target `healthy`.
+- `GET /api/health` → `200 {"ok":true,"service":"sarif"}`; `GET /` → `200`. Proven on both runs.
+- **Idempotency (Run 2, same SHA):** `publish` logged *"Image tag …3a3ea27… already exists in ECR — reusing; skipping build/push"* (build/push steps `skipped`); `deploy`'s `kubectl apply -k` reported **every** resource `unchanged` (`configmap/sarif-config`, `service/sarif`, `persistentvolumeclaim/sarif-data`, `deployment.apps/sarif`, `ingress.networking.k8s.io/sarif`); rollout, image check, and health checks all passed again with no retry needed.
+
+### First-run DNS observation (not an infrastructure defect)
+
+On the initial deploy run, the Kubernetes/AWS portion of the pipeline succeeded completely on the first attempt: OIDC, `kubectl apply -k`, rollout, the running-image check, and the PVC-Bound-on-`gp3` check all passed. Only the final smoke-test step's first attempt failed — `curl` from the self-hosted runner (the operator's Mac) returned `000` (no response) probing `/api/health` for the full retry budget. Direct diagnosis established this was **not** an application, Kubernetes, or AWS problem: the ALB's target group already reported the pod `healthy`, and `curl --resolve` (bypassing DNS) to the ALB's IP directly returned `200` the entire time. The cause was a temporary negative-DNS-cache entry in the operator Mac's local resolver (`mDNSResponder`) for the brand-new ALB hostname — `dig`/`host`, which query nameservers directly, resolved it correctly throughout, while `curl`'s normal resolution path did not. Once that local cache entry cleared (a few minutes later), a retry of only the `deploy` job passed cleanly, and the independent same-SHA `workflow_dispatch` run (Run 2) passed on its first attempt with no retry, confirming the issue was a one-time local caching artifact tied to the ALB's first-ever creation on this recreated cluster — not a recurring or infrastructural condition. No Terraform, IAM, Kubernetes manifest, or application defect was identified.
+
+---
+
 ## Implementation sequence
 
 1. Write this design decisions document. *(this document)*
@@ -186,25 +255,26 @@ No changes required here — this section records that existing discipline exten
 5. Add persistent GitHub OIDC Terraform (`environments/dev/github-actions`: provider, role, policy).
 6. Prove OIDC authentication + ECR push in isolation.
 7. Add the ephemeral EKS access entry + access policy association in `eks-platform`, plus implement the namespace-ownership change decided in step 2 (`git mv k8s/base/namespace.yaml` to `k8s/overlays/local/namespace.yaml`).
-8. Prove `workflow_dispatch` deployment end-to-end.
-9. Enable automatic deployment on push to `main`, with the cluster-absent preflight in place.
-10. Tear everything down, confirm the preflight skip path fires correctly on a real merge with no cluster present, and document the completed architecture.
+8. Prove `workflow_dispatch` deployment end-to-end. **Done (Increment 5)** — run [29291839523](https://github.com/adeagon/sarif/actions/runs/29291839523), also serving as the same-SHA idempotency proof.
+9. Enable automatic deployment on push to `main`. **Proven once, then corrected (Increment 5)** — run [29290997161](https://github.com/adeagon/sarif/actions/runs/29290997161) deliberately demonstrated this path works end-to-end. It was not kept as steady-state behavior: the runner capable of running `deploy` is temporary and is not on standby for ordinary pushes, so the trigger condition was corrected to `workflow_dispatch`-only immediately afterward (see "Steady-state trigger" above). The cluster-absent preflight mentioned in the original plan for this step was **not** implemented; `deploy` currently assumes the cluster is present (see Completion criteria — deferred).
+10. Tear everything down, confirm the preflight skip path fires correctly on a real merge with no cluster present, and document the completed architecture. **Not yet done.** Increment 5 documented the completed *deploy* architecture (this document); the preflight-skip proof and teardown are follow-up work, gated on implementing the deferred cluster-absent preflight first.
 
 ---
 
 ## Completion criteria
 
-- [ ] Push to `main` runs test → audit → build → push → (deploy if cluster present, clean skip if not).
-- [ ] OIDC authentication working; no static AWS keys in GitHub secrets.
-- [ ] `npm audit --omit=dev` is a hard gate and currently passes clean (0 findings, verified).
-- [ ] Images tagged with the full 40-character `github.sha`; `:latest` never used for deploys.
-- [ ] Cluster-absent path tested for real: `ResourceNotFoundException` skips cleanly; a simulated `AccessDeniedException` (or other failure) fails the workflow loudly.
-- [ ] At least one deliberate automatic deploy on merge to `main`, proven while the stack is up, documented with evidence (same standard as the Phase 1C teardown/recreate proof).
-- [ ] EKS access entry scoped to `AmazonEKSEditPolicy` / namespace `sarif` — not cluster-admin.
-- [ ] Namespace ownership resolved: `namespace.yaml` removed from `k8s/base`, present only in `k8s/overlays/local`, absent from `k8s/overlays/eks` — `eks-platform` has sole ownership on EKS, confirmed by a clean Terraform plan after deployment, not just planned.
-- [ ] Secret and PVC discipline unchanged — CI does not manage Secret values, does not delete or prune the PVC, and only reapplies the committed PVC manifest idempotently.
-- [ ] Pipeline documented in `sarif`'s README: stages, OIDC trust model (why no static keys), image-tagging strategy, and the CI/CD-vs-GitOps tradeoff.
+- [x] Push to `main` validates, builds, and publishes — `test` → `audit` → `build` → `push`, proven end-to-end and reconfirmed on every Increment 5 run.
+- [x] Automatic push-triggered deployment deliberately proven once — commit `3a3ea27983d38815f9fced71abb88cf2edf81a7d`, run [29290997161](https://github.com/adeagon/sarif/actions/runs/29290997161), documented to the same evidence standard as the Phase 1C teardown/recreate proof. This run executed under `deploy`'s original trigger condition (`!= 'pull_request'`), while the temporary runner happened to be online. That condition has since been corrected to `workflow_dispatch`-only (see "Steady-state trigger" above) — this run remains valid historical evidence that automatic push-triggered deployment works end-to-end; it does not describe current steady-state behavior.
+- [x] `workflow_dispatch` deployment and same-SHA idempotency proven — run [29291839523](https://github.com/adeagon/sarif/actions/runs/29291839523): `publish` reused the existing image, every resource `kubectl apply -k` touched reported `unchanged`, rollout and health checks passed with no retry, and the PVC volume was untouched.
+- [ ] Cluster-absent preflight and skip behavior: `ResourceNotFoundException` skips cleanly; a simulated `AccessDeniedException` (or other failure) fails the workflow loudly. **Deferred** — not implemented in Increment 5; `deploy` has no cluster-presence preflight yet. Distinct from the trigger-condition correction above: this is about what `deploy` should do when the cluster doesn't exist, not when `deploy` should run. Tracked as follow-up work.
+- [x] OIDC authentication working; no static AWS keys in GitHub secrets — proven for **both** `publish` and `deploy` (assumed role `arn:aws:sts::702516017596:assumed-role/cloud-platform-lab-github-actions/GitHubActions`).
+- [x] `npm audit --omit=dev` is a hard gate and currently passes clean (0 findings, verified, reconfirmed on every Increment 5 run).
+- [x] Images tagged with the full 40-character `github.sha`; `:latest` never used for deploys — verified by direct jsonpath comparison against the running Deployment.
+- [x] EKS access entry scoped to `AmazonEKSEditPolicy` / namespace `sarif` — not cluster-admin. Proven sufficient for the full `apply` / `rollout status` / `get` sequence with no RBAC gap.
+- [x] Namespace ownership resolved: `namespace.yaml` removed from `k8s/base`, present only in `k8s/overlays/local`, absent from `k8s/overlays/eks` — `eks-platform` has sole ownership on EKS, confirmed by a clean Terraform plan **after a real live deployment**, not just planned: `terraform -chdir=environments/dev/eks-platform plan` → *"No changes. Your infrastructure matches the configuration."*
+- [x] Secret and PVC discipline unchanged — CI does not manage Secret values (the post-recreation `sarif-secrets` was restored manually, out-of-band, from `sarif/app/.env`), does not delete or prune the PVC (same volume `pvc-cf85018c-e1f8-4fe9-bdcb-ef8cc81b536a` persisted across both runs), and only reapplies the committed PVC manifest idempotently (`persistentvolumeclaim/sarif-data unchanged` on the second run).
+- [x] Pipeline documented: stages, OIDC trust model (why no static keys, and why `deploy` needs a self-hosted runner while the EKS endpoint is `/32`-restricted), image-tagging strategy, and the CI/CD-vs-GitOps tradeoff — see "Increment 5 — proven final architecture" above and `k8s/README.md`.
 
 ---
 
-*No Terraform, Kubernetes manifests, GitHub Actions workflows, or application code were modified to produce this document. No AWS resources were created.*
+*This document was originally written as planning-only (see the implementation sequence above); it has since been updated in place, increment by increment, to record what was actually built and proven. Everything under "Increment 5 — proven final architecture" and the Completion criteria reflects the live, verified state of the system, not a plan.*

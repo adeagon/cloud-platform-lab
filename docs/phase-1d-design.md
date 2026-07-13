@@ -54,11 +54,11 @@
 - **Push to `main`:** build → push image → check cluster existence → deploy if present, skip successfully with a clear message if absent.
 - **`workflow_dispatch`:** manual deploy, used whenever the cluster is intentionally brought back up (also covers the Q1 manifest-only-change case).
 
-### `workflow_dispatch` deploy artifact (implementation requirement)
+### Publish-time ECR existence check (implementation requirement)
 
-For `workflow_dispatch`, the deploy artifact is the full SHA of the selected Sarif ref. The workflow checks ECR first and reuses the existing image if that SHA tag already exists; it builds and pushes only when the image is absent. This allows manifest-only redeployments without overwriting immutable tags or rebuilding unchanged application code.
+Every Publish run — `push` and `workflow_dispatch` alike — checks ECR first for the full-SHA tag and reuses the existing image if that tag already exists; it builds and pushes only when the image is absent. This is a deliberate broadening of the original design, which ran the check only under `workflow_dispatch`: running it unconditionally makes same-SHA reruns of a `push` idempotent and compatible with immutable ECR tags, at no cost to the `push` path — a new commit's full-SHA tag never pre-exists, so it still builds and publishes automatically. It also still covers manifest-only redeployments via `workflow_dispatch` without overwriting immutable tags or rebuilding unchanged application code.
 
-This means the Publish job's build/push steps (Q4, steps 6–8) are unconditional on `push`, but conditional on an ECR existence check when triggered via `workflow_dispatch`.
+This means the Publish job's build/push steps (Q4, steps 6–8) are conditional on an ECR existence check for every trigger, not `push`-unconditional as originally decided.
 
 ### Exact cluster-absent error handling (implementation requirement)
 
@@ -86,7 +86,7 @@ This requires explicit branching on the captured stderr/exit code in the shell s
 7. Build `linux/amd64` image
 8. Push to ECR, tagged with the full 40-character `github.sha`
 
-*Under `workflow_dispatch`, steps 6–8 run only if that SHA's image doesn't already exist in ECR — see Q3.*
+*Steps 6–8 run only if that SHA's image doesn't already exist in ECR — for every Publish trigger, not only `workflow_dispatch` — see Q3.*
 
 **Deploy** (push to `main`, gated on cluster presence; `workflow_dispatch` always runs it):
 9. Check cluster exists (see Q3 error handling)

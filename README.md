@@ -66,7 +66,8 @@ cloud-platform-lab/
 │       └── outputs.tf           # Module outputs
 ├── docs/
 │   ├── phase-1c-completion.md   # Phase 1C evidence + teardown/recreate proof
-│   └── phase-1d-design.md       # Phase 1D CI/CD design decisions + Increment 5 evidence
+│   ├── phase-1d-design.md       # Phase 1D CI/CD design decisions + Increment 5 evidence
+│   └── phase-1d-completion.md   # Phase 1D evidence, teardown verification, deferred work
 ├── TEARDOWN.md                  # Teardown order + cost cleanup checklist
 ├── k8s/
 │   ├── README.md                # Design rationale + local bring-up runbook (interview-ready)
@@ -101,24 +102,29 @@ cloud-platform-lab/
 
 ## Current status
 
-Phase 1C is complete, and Phase 1D's core CI/CD pipeline is implemented and proven live
-against the running stack (cluster currently up, pending teardown approval):
+Phase 1C is complete, and Phase 1D's core CI/CD pipeline was implemented and proven live
+before the ephemeral stack was torn down cleanly:
 
-- ✅ EKS cluster provisioned via Terraform (`environments/dev/eks`)
+- ✅ EKS cluster was provisioned via Terraform (`environments/dev/eks`), proven live, and
+  torn down in the controlled teardown documented in `docs/phase-1d-completion.md`
 - ✅ GitHub Actions CI/CD: push to `main` runs validate → publish (OIDC → ECR, idempotent
   full-SHA tags); deploy (OIDC → EKS) is `workflow_dispatch`-only in steady state, proven
   live plus an independent same-SHA idempotency rerun. Automatic push-triggered deployment
   was also deliberately proven once, as historical evidence, under a trigger condition since
   corrected — see `docs/phase-1d-design.md` ("Steady-state trigger")
-- ✅ ECR image `sarif:3a3ea27983d38815f9fced71abb88cf2edf81a7d` deployed via CI and verified
-- ✅ Application reachable through an ALB (HTTP-only for this phase — no TLS/domain yet)
-- ✅ `gp3` PVC (EBS CSI) bound; backing EBS volume provisioned and reclaimed on teardown
+- ✅ ECR image `sarif:3a3ea27983d38815f9fced71abb88cf2edf81a7d` was built and deployed via CI
+  and verified live; the image remains retained in ECR after teardown
+- ✅ Application was reachable through an ALB during verification (HTTP-only for this phase —
+  no TLS/domain yet); the ALB was removed on teardown
+- ✅ `gp3` PVC (EBS CSI) was bound during verification; the PVC and its backing EBS volume
+  were reclaimed on teardown
 - ✅ Pushover notification path verified from inside the pod
 - ✅ Full teardown → recreate → re-verify → teardown cycle proven (Phase 1C)
 - ⏭️ Cluster-absent deploy preflight deferred to a follow-up increment
 
-See [`docs/phase-1c-completion.md`](docs/phase-1c-completion.md) and
-[`docs/phase-1d-design.md`](docs/phase-1d-design.md) for the full evidence.
+See [`docs/phase-1c-completion.md`](docs/phase-1c-completion.md),
+[`docs/phase-1d-design.md`](docs/phase-1d-design.md), and
+[`docs/phase-1d-completion.md`](docs/phase-1d-completion.md) for the full evidence.
 
 ## Prerequisites
 
